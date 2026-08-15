@@ -150,11 +150,15 @@ export class MemoryStore {
   }
 
   async countEvents(): Promise<number> {
+    return (await this.journalLines()).length;
+  }
+
+  private async journalLines(): Promise<string[]> {
     try {
       const text = await readFile(this.paths.eventsFile, 'utf8');
-      return text.split('\n').filter(Boolean).length;
+      return text.split('\n').filter(Boolean);
     } catch {
-      return 0;
+      return [];
     }
   }
 
@@ -180,21 +184,7 @@ export class MemoryStore {
   }
 
   async recentActivities(limit = 20): Promise<AgentActivity[]> {
-    try {
-      const text = await readFile(this.paths.eventsFile, 'utf8');
-      const lines = text.split('\n').filter(Boolean);
-      const items: AgentActivity[] = [];
-      for (let i = lines.length - 1; i >= 0 && items.length < limit; i--) {
-        try {
-          items.push(JSON.parse(lines[i]) as AgentActivity);
-        } catch {
-          // Ignore malformed line, preserving the rest of the event log.
-        }
-      }
-      return items;
-    } catch {
-      return [];
-    }
+    return tail(await this.journalLines(), limit);
   }
 
   /**
@@ -203,18 +193,22 @@ export class MemoryStore {
    * still durable and the next agent to refresh picks it up from disk. Failing here would
    * throw away work that already succeeded, which is the wrong trade under concurrency.
    */
-  async refreshSharedMemory(config: ProjectConfig): Promise<void> {
+  async refreshSharedMemory(config: ProjectConfig): Promise<number | undefined> {
     const p = this.paths;
     try {
-      await withFileLock(path.join(p.locksDir, 'shared-memory.lock'), async () => {
-        const [states, recent] = await Promise.all([
-          this.listStates(),
-          this.recentActivities(config.recentHistoryLimit)
-        ]);
-        await atomicWrite(p.sharedMemoryFile, renderSharedMemory(states, recent, config));
+      return await withFileLock(path.join(p.locksDir, 'shared-memory.lock'), async () => {
+        const [states, lines] = await Promise.all([this.listStates(), this.journalLines()]);
+        await atomicWrite(
+          p.sharedMemoryFile,
+          renderSharedMemory(states, tail(lines, config.recentHistoryLimit), config)
+        );
+        // The journal was read here anyway; the size lets the caller decide to compact
+        // without paying for a second full read.
+        return lines.length;
       });
     } catch (error) {
       if (!isLockTimeout(error)) throw error;
+      return undefined;
     }
   }
 
@@ -229,4 +223,17 @@ export class MemoryStore {
   private historyFile(agentId: string): string {
     return path.join(this.paths.historyDir, `${assertAgentId(agentId)}.md`);
   }
+}
+
+/** Newest first, skipping any line torn by a partial write. */
+function tail(lines: string[], limit: number): AgentActivity[] {
+  const items: AgentActivity[] = [];
+  for (let i = lines.length - 1; i >= 0 && items.length < limit; i--) {
+    try {
+      items.push(JSON.parse(lines[i]) as AgentActivity);
+    } catch {
+      // Ignore malformed line, preserving the rest of the event log.
+    }
+  }
+  return items;
 }

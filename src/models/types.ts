@@ -85,4 +85,9 @@ export interface ProjectConfig {
   staleAfterSeconds: number;
   recentHistoryLimit: number;
   projectName: string;
+  /**
+   * Archive the journal once it passes this many events. 0 disables it, leaving the
+   * journal to grow until someone runs `compact`.
+   */
+  autoCompactAfterEvents: number;
 }

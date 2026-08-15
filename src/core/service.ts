@@ -2,6 +2,7 @@ import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, Cod
 import { createId, createSessionId } from '../utils/ids.js';
 import { nowIso } from '../utils/time.js';
 import { readConfig, writeConfig, DEFAULT_CONFIG } from './config.js';
+import { isLockTimeout } from '../utils/fs.js';
 import { detectConflicts } from './conflicts.js';
 import { InboxStore } from './inbox.js';
 import { formatPointer, pointerKey } from './pointer.js';
@@ -79,7 +80,8 @@ export class AgentMemoryService {
     const current = await this.config();
     const next = { ...current, ...patch, version: 1 as const };
     await writeConfig(next, this.root);
-    await this.store.refreshSharedMemory(next);
+    // Passing the new config means lowering the threshold takes effect immediately.
+    await this.afterWrite(next);
     return next;
   }
 
@@ -114,7 +116,7 @@ export class AgentMemoryService {
       task
     });
     await this.store.appendActivity(activity);
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return state;
   }
 
@@ -143,7 +145,7 @@ export class AgentMemoryService {
     await this.store.appendActivity(
       this.makeActivity({ agentId, type: 'REGISTERED', description, task: nextTask }, now)
     );
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return state;
   }
 
@@ -159,7 +161,7 @@ export class AgentMemoryService {
       })
     );
     await this.store.deleteState(agentId);
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return state;
   }
 
@@ -208,7 +210,7 @@ export class AgentMemoryService {
       if (removed > 0) result.messagesTrimmed.push({ agent, removed });
     }
 
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return result;
   }
 
@@ -217,7 +219,7 @@ export class AgentMemoryService {
     const now = nowIso();
     const next: AgentState = { ...state, lastHeartbeatAt: now, updatedAt: now };
     await this.store.writeState(next);
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return next;
   }
 
@@ -246,7 +248,7 @@ export class AgentMemoryService {
     await this.store.writeState(next);
     await this.store.appendActivity(activity);
     await this.notifyDependency(input, state);
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return { activity, state: next, conflicts };
   }
 
@@ -281,7 +283,7 @@ export class AgentMemoryService {
   /** Sends a message to another agent inbox. The recipient must be registered. */
   async sendMessage(input: SendMessageInput): Promise<AgentMessage> {
     const message = await this.deliver(input);
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return message;
   }
 
@@ -350,8 +352,29 @@ export class AgentMemoryService {
       task: input.task
     });
     await this.store.appendActivity(activity, { history: input.history !== false });
-    await this.store.refreshSharedMemory(await this.config());
+    await this.afterWrite();
     return activity;
+  }
+
+  /**
+   * Regenerates the panel and, if the journal has outgrown its limit, archives the old
+   * events. The size comes from the refresh, which already read the journal, so the check
+   * costs nothing. Every writer runs it, but archiveEvents is idempotent under its lock:
+   * whoever gets there first trims, the rest find nothing left to do.
+   */
+  private async afterWrite(config?: ProjectConfig): Promise<void> {
+    const effective = config ?? (await this.config());
+    const journalSize = await this.store.refreshSharedMemory(effective);
+    const limit = effective.autoCompactAfterEvents ?? 0;
+    if (limit <= 0 || journalSize === undefined || journalSize <= limit) return;
+
+    const keep = Math.max(effective.recentHistoryLimit, Math.floor(limit / 2));
+    try {
+      await this.store.archiveEvents(keep, nowIso().replace(/[:.]/g, '-'));
+    } catch (error) {
+      // Another agent is already trimming; the write itself is long since durable.
+      if (!isLockTimeout(error)) throw error;
+    }
   }
 
   async read(agentId?: string): Promise<string | AgentState> {

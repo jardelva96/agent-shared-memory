@@ -171,7 +171,21 @@ agent-memory log --json
 
 ## Compactação
 
-Histórico e journal crescem indefinidamente. O `compact` arquiva o excedente em vez de descartar:
+### Automática
+
+O journal é arquivado sozinho ao passar de `autoCompactAfterEvents` (padrão 5000), mantendo a metade mais recente:
+
+```bash
+agent-memory config --auto-compact 5000   # 0 desliga
+```
+
+Isso não é só arrumação. Toda escrita regenera o painel, e regenerar lê o journal inteiro — então o journal em crescimento encarece **toda escrita de todo agente**. Medido: sem compactação, a latência por escrita passou de 6,8 ms (2 mil eventos) para 12,7 ms (40 mil) e continuava subindo; com ela ligada, fica em ~6 ms independentemente do volume acumulado, porque o journal vivo estabiliza.
+
+O gatilho é gratuito: a regeneração do painel já leu o journal, então o tamanho vem junto, sem uma segunda leitura. Vários agentes podem disparar ao mesmo tempo — o arquivamento é idempotente sob lock, então o primeiro corta e os demais não encontram nada a fazer.
+
+### Manual
+
+O `compact` arquiva o excedente em vez de descartar:
 
 ```bash
 agent-memory compact --keep 500 --dry-run
@@ -473,7 +487,6 @@ O exemplo cria um projeto temporário, registra três agentes e simula conflito 
 - plugin de VS Code;
 - referência por AST/LSP em vez de somente strings semânticas;
 - detecção de dependências entre símbolos;
-- compactação automática por limite, sem precisar chamar `compact`;
 - integração com worktrees e branches.
 
 ## Licença
