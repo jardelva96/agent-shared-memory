@@ -202,3 +202,61 @@ test('a pinned id cannot be impersonated by the caller', async () => {
     assert.equal(owner.current?.description, 'tentativa de personificacao');
   });
 });
+
+test('claiming a synthesis hands over what the parts reported', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Sintese');
+    await call('memory_register', { agent: 'LEAD' });
+
+    // The lead splits the demand and queues the gathering task itself, through the tools.
+    const first = await call('memory_task_create', { agent: 'LEAD', title: 'medir a parte A' });
+    const second = await call('memory_task_create', { agent: 'LEAD', title: 'medir a parte B' });
+    const ids = [first, second].map(r => /Queued (\S+):/.exec(r.content[0].text)![1]);
+
+    const gather = await call('memory_task_create', {
+      agent: 'LEAD',
+      title: 'juntar A e B',
+      after: ids.join(',')
+    });
+    assert.match(gather.content[0].text, /Waiting for/, 'the lead is told it will not run yet');
+
+    await service.claimTask('LEAD');
+    await service.finishTask(ids[0], 'DONE', 'A mede 12', 'LEAD');
+    await service.claimTask('LEAD');
+    await service.finishTask(ids[1], 'DONE', 'B mede 45', 'LEAD');
+
+    const claimed = await call('memory_task_claim', { agent: 'LEAD' });
+    const text = claimed.content[0].text;
+    assert.match(text, /juntar A e B/);
+    // Without these the agent is handed the question with the answers withheld.
+    assert.match(text, /A mede 12/, 'the first part\u2019s result came with the claim');
+    assert.match(text, /B mede 45/, 'and the second one too');
+  });
+});
+
+test('a listing stays quiet about results until asked', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Sintese');
+    await call('memory_register', { agent: 'LEAD' });
+    const created = await call('memory_task_create', { agent: 'LEAD', title: 'medir algo' });
+    const id = /Queued (\S+):/.exec(created.content[0].text)![1];
+    await service.claimTask('LEAD');
+    await service.finishTask(id, 'DONE', 'resposta bem longa que ninguem quer em toda listagem', 'LEAD');
+
+    const quiet = await call('memory_task_list', { agent: 'LEAD' });
+    assert.doesNotMatch(quiet.content[0].text, /resposta bem longa/, 'the default listing stays cheap');
+
+    const loud = await call('memory_task_list', { agent: 'LEAD', with_results: true });
+    assert.match(loud.content[0].text, /resposta bem longa/, 'and readable when the caller asks');
+  });
+});
+
+test('a task cannot be queued behind an id that does not exist', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Sintese');
+    await call('memory_register', { agent: 'LEAD' });
+    const bad = await call('memory_task_create', { agent: 'LEAD', title: 'juntar', after: 'T-INVENTADO' });
+    assert.equal(bad.isError, true, 'a typo here would block the task forever, silently');
+    assert.match(bad.content[0].text, /does not exist/);
+  });
+});

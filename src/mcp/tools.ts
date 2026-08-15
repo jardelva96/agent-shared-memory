@@ -3,6 +3,7 @@ import { detectConflicts } from '../core/conflicts.js';
 import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
+import { dependenciesOf } from '../core/tasks.js';
 import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
 import { INVALID_PARAMS, RpcError } from './jsonrpc.js';
 
@@ -165,7 +166,9 @@ export const TOOLS: ToolDefinition[] = [
     name: 'memory_task_create',
     description:
       'Queue work for another agent to pick up later. Unlike a message, a task persists until someone claims and finishes it, ' +
-      'so use it for work that must survive this session. Assign it with `for` when a specific agent must do it; leave it open otherwise.',
+      'so use it for work that must survive this session. Assign it with `for` when a specific agent must do it; leave it open otherwise. ' +
+      'To split a demand: queue one task per independent part, then queue the task that puts the parts together with `after` ' +
+      'listing all of them — it stays out of the queue until every part has landed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -173,6 +176,12 @@ export const TOOLS: ToolDefinition[] = [
         title: { type: 'string', description: 'What needs doing, in one precise line.' },
         detail: { type: 'string', description: 'Everything the executor needs to start without asking.' },
         for: { type: 'string', description: 'Agent id that must do it. Omit to leave it open to anyone.' },
+        after: {
+          type: 'string',
+          description:
+            'Comma-separated task ids this one waits for. It is invisible to the queue until every ' +
+            'one of them is DONE, so a task that gathers results never runs on partial work.'
+        },
         review_by: {
           type: 'string',
           description:
@@ -193,6 +202,12 @@ export const TOOLS: ToolDefinition[] = [
         status: {
           type: 'string',
           description: 'Comma-separated filter: OPEN, CLAIMED, DONE, FAILED, CANCELLED. Defaults to all.'
+        },
+        with_results: {
+          type: 'boolean',
+          description:
+            'Include what each finished task reported. Off by default because results are long; ' +
+            'turn it on to read back work you delegated.'
         }
       }
     }
@@ -295,13 +310,21 @@ export async function callTool(
         assignedTo: optionalString(args, 'for'),
         pointer: parsePointer(optionalString(args, 'pointer')),
         reviewBy: optionalString(args, 'review_by'),
+        dependsOn: optionalString(args, 'after')
+          ?.split(',')
+          .map(id => id.trim())
+          .filter(Boolean),
         // Set when this server was launched by a runner: the queue then knows this task
         // is one generation deeper, and the depth limit applies without the model
         // having to be aware of it at all.
         parentTaskId: process.env.AGENT_TASK_ID || undefined
       });
       const review = task.reviewTaskId ? ` Review queued as ${task.reviewTaskId}.` : '';
-      return `Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''} at depth ${task.depth}.${review}`;
+      // Said back explicitly: a task queued with `after` will not be picked up now, and an
+      // agent that expected it to run would otherwise read the silence as something broken.
+      const waiting = dependenciesOf(task);
+      const blocked = waiting.length ? ` Waiting for ${waiting.join(', ')}.` : '';
+      return `Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''} at depth ${task.depth}.${blocked}${review}`;
     }
     case 'memory_task_list': {
       const statusFilter = optionalString(args, 'status');
@@ -309,11 +332,13 @@ export async function callTool(
         status: statusFilter ? (statusFilter.toUpperCase().split(',') as TaskStatus[]) : undefined
       });
       if (tasks.length === 0) return 'No tasks.';
+      const withResults = args !== null && typeof args === 'object' && (args as Record<string, unknown>).with_results === true;
       return tasks
         .map(task => {
           const who = task.assignedTo ? ` for ${task.assignedTo}` : task.claimedBy ? ` by ${task.claimedBy}` : '';
           const where = task.pointer ? ` | ${formatPointer(task.pointer)}` : '';
-          return `${task.id} ${task.status} ${task.title}${who}${where}`;
+          const head = `${task.id} ${task.status} ${task.title}${who}${where}`;
+          return withResults && task.result ? `${head}\n    -> ${task.result.replace(/\n/g, '\n       ')}` : head;
         })
         .join('\n');
     }
@@ -323,6 +348,22 @@ export async function callTool(
       const lines = [`Claimed ${task.id}: ${task.title}`];
       if (task.detail) lines.push(task.detail);
       if (task.pointer) lines.push(`Pointer: ${formatPointer(task.pointer)}`);
+
+      // A task that waited for others exists to put their results together, and nothing
+      // else in the tool surface can read a result. Without this the agent claiming a
+      // synthesis is handed the question with the answers withheld: it either redoes the
+      // parts or reports that the workers said nothing. Delivered here rather than in the
+      // listing so only the agent that actually needs them pays for the tokens.
+      const waited = dependenciesOf(task);
+      if (waited.length > 0) {
+        lines.push('', 'Results of the parts this task waited for:');
+        for (const id of waited) {
+          const part = await service.tasks.read(id).catch(() => undefined);
+          if (!part) continue;
+          lines.push(`- ${part.id} (${part.title}) by ${part.claimedBy ?? 'unknown'}: ${part.result ?? '(no result recorded)'}`);
+        }
+      }
+
       lines.push(`Queued by ${task.createdBy}. Call memory_task_finish when done.`);
       return lines.join('\n');
     }

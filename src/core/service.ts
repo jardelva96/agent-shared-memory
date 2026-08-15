@@ -337,6 +337,19 @@ export class AgentMemoryService {
       throw new Error(`Cannot assign to an unregistered agent: ${input.assignedTo}`);
     }
 
+    // A dependency on a task that does not exist can never become DONE, so the task would
+    // sit OPEN and unclaimable forever while looking perfectly healthy in the listing.
+    // Cheaper to refuse the typo here than to debug a queue that silently stopped moving.
+    const dependencies = input.dependsOn
+      ? Array.isArray(input.dependsOn)
+        ? input.dependsOn
+        : [input.dependsOn]
+      : [];
+    for (const id of dependencies) {
+      const exists = await this.tasks.read(id).then(() => true, () => false);
+      if (!exists) throw new Error(`Cannot depend on a task that does not exist: ${id}`);
+    }
+
     const now = nowIso();
     const task: AgentTask = {
       id: createTaskId(),

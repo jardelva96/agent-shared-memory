@@ -201,3 +201,21 @@ test('the single-value form still works for tasks written before the list', asyn
     assert.equal((await service.claimTask('QA'))?.id, second.id, 'and still unblocks');
   });
 });
+
+test('a dependency on a task that does not exist is refused at creation', async () => {
+  await withProject(async service => {
+    // Accepting the typo would queue a task that can never be claimed: nothing will ever
+    // mark T-NAOEXISTE done, so it sits OPEN forever while the listing looks healthy.
+    await assert.rejects(
+      () => service.createTask({ title: 'sintese', createdBy: 'LEAD', dependsOn: ['T-NAOEXISTE'] }),
+      /does not exist/
+    );
+
+    const real = await service.createTask({ title: 'parte', createdBy: 'LEAD' });
+    await assert.rejects(
+      () => service.createTask({ title: 'sintese', createdBy: 'LEAD', dependsOn: [real.id, 'T-ERRADO'] }),
+      /does not exist/,
+      'one bad id in the list is still a bad list'
+    );
+  });
+});
