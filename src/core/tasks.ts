@@ -66,7 +66,7 @@ export class TaskStore {
    * Runs under a queue-wide lock so two runners can never take the same task, and
    * reclaims expired claims first so work abandoned by a dead runner is picked up again.
    */
-  async claim(agentId: string, claimSeconds: number): Promise<AgentTask | undefined> {
+  async claim(agentId: string, claimSeconds: number, maxAttempts = 0): Promise<AgentTask | undefined> {
     const p = this.paths;
     await ensureDir(p.tasksDir);
 
@@ -76,6 +76,23 @@ export class TaskStore {
 
       for (const task of tasks) {
         if (task.status !== 'CLAIMED' || !task.claimExpiresAt || task.claimExpiresAt > now) continue;
+
+        // A task that keeps killing its runner would otherwise return here forever, and
+        // to the *front* of the queue: its createdAt never changes, so it outranks
+        // everything queued since. Retried enough times, it is the task that is broken.
+        if (maxAttempts > 0 && task.attempts >= maxAttempts) {
+          task.status = 'FAILED';
+          task.result =
+            `abandonada apos ${task.attempts} tentativa(s): o claim expirou sem conclusao todas as vezes. ` +
+            'Provavel tarefa venenosa — revise antes de reenfileirar.';
+          task.finishedAt = now;
+          task.claimedBy = undefined;
+          task.claimExpiresAt = undefined;
+          task.updatedAt = now;
+          await this.write(task);
+          continue;
+        }
+
         task.status = 'OPEN';
         task.claimedBy = undefined;
         task.claimedAt = undefined;

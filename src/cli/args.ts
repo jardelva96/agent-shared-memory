@@ -58,6 +58,8 @@ const KNOWN_FLAGS = new Set([
   'timeout',
   'max-tasks',
   'max-cost',
+  'claim-seconds',
+  'max-attempts',
   'version'
 ]);
 

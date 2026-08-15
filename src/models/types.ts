@@ -136,4 +136,9 @@ export interface ProjectConfig {
   taskClaimSeconds: number;
   /** Maximum spawn generations: a task created while running a task is one deeper. */
   maxTaskDepth: number;
+  /**
+   * How many expired claims a task may collect before it is treated as poisonous and
+   * failed instead of returned to the queue. 0 disables the dead letter.
+   */
+  maxTaskAttempts: number;
 }

@@ -299,7 +299,20 @@ async function main(): Promise<void> {
       const agentId = required(stringFlag(parsed.flags, 'agent'), '--agent');
       const exec = required(stringFlag(parsed.flags, 'exec'), '--exec');
       const config = await service.config();
-      const timeout = numberFlag(parsed.flags, 'timeout') ?? config.taskClaimSeconds;
+      const lease = config.taskClaimSeconds;
+      const explicitTimeout = numberFlag(parsed.flags, 'timeout');
+      // The claim lease starts when the task is claimed; the timeout starts after the
+      // process spawns. Giving them the same length means a task that reaches its
+      // timeout has always already lost its claim, so its result is refused and the
+      // work is thrown away. Finish comfortably inside the lease instead.
+      const timeout = explicitTimeout ?? Math.max(1, Math.floor(lease * 0.8));
+      if (explicitTimeout !== undefined && explicitTimeout >= lease) {
+        console.warn(
+          `warning: --timeout ${explicitTimeout}s is not below the claim lease of ${lease}s. ` +
+            `A task that runs that long loses its claim before finishing, and its result is rejected. ` +
+            `Raise the lease with "config --claim-seconds" or lower --timeout.`
+        );
+      }
       const once = boolFlag(parsed.flags, 'once');
       const options = {
         agentId,
@@ -422,7 +435,10 @@ async function main(): Promise<void> {
       const recent = numberFlag(parsed.flags, 'recent');
       const name = stringFlag(parsed.flags, 'name');
       const autoCompact = numberFlag(parsed.flags, 'auto-compact');
-      if (stale === undefined && recent === undefined && name === undefined && autoCompact === undefined) {
+      const claimSeconds = numberFlag(parsed.flags, 'claim-seconds');
+      const maxAttempts = numberFlag(parsed.flags, 'max-attempts');
+      if (stale === undefined && recent === undefined && name === undefined && autoCompact === undefined
+          && claimSeconds === undefined && maxAttempts === undefined) {
         console.log(JSON.stringify(await service.config(), null, 2));
         break;
       }
@@ -430,7 +446,9 @@ async function main(): Promise<void> {
         ...(stale !== undefined ? { staleAfterSeconds: stale } : {}),
         ...(recent !== undefined ? { recentHistoryLimit: recent } : {}),
         ...(name !== undefined ? { projectName: name } : {}),
-        ...(autoCompact !== undefined ? { autoCompactAfterEvents: autoCompact } : {})
+        ...(autoCompact !== undefined ? { autoCompactAfterEvents: autoCompact } : {}),
+        ...(claimSeconds !== undefined ? { taskClaimSeconds: claimSeconds } : {}),
+        ...(maxAttempts !== undefined ? { maxTaskAttempts: maxAttempts } : {})
       });
       console.log(JSON.stringify(config, null, 2));
       break;

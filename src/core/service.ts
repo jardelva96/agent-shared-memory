@@ -377,7 +377,7 @@ export class AgentMemoryService {
   async claimTask(agentId: string): Promise<AgentTask | undefined> {
     await this.requireAgent(agentId);
     const config = await this.config();
-    const task = await this.tasks.claim(agentId, config.taskClaimSeconds);
+    const task = await this.tasks.claim(agentId, config.taskClaimSeconds, config.maxTaskAttempts);
     if (!task) return undefined;
 
     await this.store.appendActivity(

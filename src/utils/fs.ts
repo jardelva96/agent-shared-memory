@@ -104,7 +104,23 @@ export async function atomicWriteJson(file: string, value: unknown): Promise<voi
   await atomicWrite(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export async function withFileLock<T>(lockFile: string, fn: () => Promise<T>, timeoutMs = 5000): Promise<T> {
+/**
+ * Long enough to outlast a slow-but-alive holder, and still shorter than the window that
+ * declares a lock abandoned.
+ *
+ * At 5s every waiter gave up while a legitimate holder was still working — listing a big
+ * queue, rewriting the journal, or just a slow disk — so the routine symptom of a slow
+ * lock was `claim`/`finish` throwing, not the double-entry the staleness check guards
+ * against. Waiting past STALE_LOCK_MS instead would mean waiting on a lock this call is
+ * about to reclaim anyway.
+ */
+const LOCK_WAIT_MS = 15_000;
+
+export async function withFileLock<T>(
+  lockFile: string,
+  fn: () => Promise<T>,
+  timeoutMs = LOCK_WAIT_MS
+): Promise<T> {
   const start = Date.now();
   await ensureDir(path.dirname(lockFile));
   let lastCode = 'EEXIST';
