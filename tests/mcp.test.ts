@@ -1,0 +1,143 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { AgentMemoryService } from '../src/core/service.js';
+import { createMcpMethods, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/server.js';
+import { MethodMap } from '../src/mcp/jsonrpc.js';
+import { TOOLS } from '../src/mcp/tools.js';
+
+interface ToolResult {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+}
+
+async function withServer(fn: (call: (name: string, args?: Record<string, unknown>) => Promise<ToolResult>, methods: MethodMap, service: AgentMemoryService) => Promise<void>): Promise<void> {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-mcp-'));
+  try {
+    const service = new AgentMemoryService(root);
+    const methods = createMcpMethods(service);
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      (await methods.get('tools/call')!({ name, arguments: args })) as ToolResult;
+    await fn(call, methods, service);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('initialize negotiates the protocol version and advertises tools', async () => {
+  await withServer(async (_call, methods) => {
+    const negotiated = (await methods.get('initialize')!({ protocolVersion: '2024-11-05' })) as {
+      protocolVersion: string;
+      serverInfo: { name: string };
+      instructions: string;
+    };
+    assert.equal(negotiated.protocolVersion, '2024-11-05');
+    assert.equal(negotiated.serverInfo.name, 'agent-shared-memory');
+    assert.match(negotiated.instructions, /READ -> INTENT -> CODE -> RESULT/);
+
+    const unknown = (await methods.get('initialize')!({ protocolVersion: '1999-01-01' })) as {
+      protocolVersion: string;
+    };
+    assert.equal(unknown.protocolVersion, SUPPORTED_PROTOCOL_VERSIONS[0]);
+
+    const listed = (await methods.get('tools/list')!(undefined)) as { tools: Array<{ name: string }> };
+    assert.deepEqual(
+      listed.tools.map(t => t.name).sort(),
+      TOOLS.map(t => t.name).sort()
+    );
+  });
+});
+
+test('tools refuse to write before init instead of creating a stray .agents/', async () => {
+  await withServer(async call => {
+    const result = await call('memory_register', { agent: 'AGENT-01' });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /agent-memory init/);
+  });
+});
+
+test('register, record and status round-trip through the tools', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('MCP Project');
+
+    const registered = await call('memory_register', { agent: 'AGENT-01', role: 'Backend', task: 'AUTH-184' });
+    assert.notEqual(registered.isError, true);
+    assert.match(registered.content[0].text, /Registered AGENT-01/);
+
+    const recorded = await call('memory_record', {
+      agent: 'AGENT-01',
+      type: 'INTENT',
+      message: 'Validar expiração do refresh token.',
+      pointer: 'src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)',
+      reason: 'Tokens expirados ainda são aceitos'
+    });
+    assert.match(recorded.content[0].text, /INTENT recorded for AGENT-01/);
+    assert.match(recorded.content[0].text, /Status is now WORKING/);
+
+    const status = await call('memory_status');
+    assert.match(status.content[0].text, /AGENT-01 \| WORKING \| Backend/);
+    assert.match(status.content[0].text, /ValidateRefreshToken/);
+
+    const log = await call('memory_log', { agent: 'AGENT-01' });
+    assert.match(log.content[0].text, /INTENT/);
+    assert.match(log.content[0].text, /REGISTERED/);
+  });
+});
+
+test('register re-attaches an existing agent instead of failing', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Reconnect Project');
+    await call('memory_register', { agent: 'AGENT-01', task: 'AUTH-184' });
+    await call('memory_record', { agent: 'AGENT-01', type: 'CHANGED', message: 'Validação adicionada.' });
+
+    const again = await call('memory_register', { agent: 'AGENT-01' });
+    assert.notEqual(again.isError, true);
+    assert.match(again.content[0].text, /already registered; re-attached/);
+    assert.match(again.content[0].text, /Validação adicionada/);
+  });
+});
+
+test('overlap is reported on record and on a status pointer probe', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Conflict Project');
+    await call('memory_register', { agent: 'AGENT-01' });
+    await call('memory_register', { agent: 'AGENT-02' });
+
+    const pointer = 'src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)';
+    await call('memory_record', { agent: 'AGENT-01', type: 'INTENT', message: 'Alterando cancelamento.', pointer });
+
+    const probe = await call('memory_status', { agent: 'AGENT-02', pointer });
+    assert.match(probe.content[0].text, /AGENT-01 \[WORKING\] EXACT/);
+
+    const clash = await call('memory_record', {
+      agent: 'AGENT-02',
+      type: 'INTENT',
+      message: 'Também alterando cancelamento.',
+      pointer
+    });
+    assert.match(clash.content[0].text, /WARNING: 1 active overlap\(s\) detected/);
+    assert.match(clash.content[0].text, /AGENT-01 \[WORKING\] EXACT/);
+  });
+});
+
+test('invalid activity type and unknown tool are rejected', async () => {
+  await withServer(async (call, methods, service) => {
+    await service.init('Validation Project');
+    await call('memory_register', { agent: 'AGENT-01' });
+
+    await assert.rejects(
+      () => call('memory_record', { agent: 'AGENT-01', type: 'HEARTBEAT', message: 'x' }),
+      /Invalid type: HEARTBEAT/
+    );
+    await assert.rejects(
+      () => methods.get('tools/call')!({ name: 'memory_nope', arguments: {} }),
+      /Unknown tool: memory_nope/
+    );
+    await assert.rejects(
+      () => call('memory_record', { agent: 'AGENT-01', type: 'INTENT' }),
+      /Missing required string argument: message/
+    );
+  });
+});

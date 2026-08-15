@@ -1,0 +1,38 @@
+{
+  "name": "agent-shared-memory",
+  "version": "1.1.0",
+  "description": "Shared real-time operational memory for multiple coding agents working in the same repository: CLI, MCP server, git watcher, inter-agent messaging and a live dashboard.",
+  "type": "module",
+  "bin": {
+    "agent-memory": "dist/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli/main.ts",
+    "test": "node --test --import tsx tests/*.test.ts",
+    "start": "node dist/cli/main.js",
+    "example": "tsx examples/demo.ts"
+  },
+  "keywords": [
+    "ai-agents",
+    "multi-agent",
+    "coding-agents",
+    "shared-memory",
+    "coordination",
+    "cli",
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "git-watcher",
+    "dashboard"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
