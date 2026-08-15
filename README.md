@@ -312,16 +312,32 @@ agent-memory mcp --root /caminho/meu-backend
 
 Sem `--root`, o diretório atual é usado. O `.agents/` precisa já existir (`agent-memory init`); as ferramentas recusam escrever antes disso em vez de criar um `.agents/` no lugar errado.
 
+### Identidade fixa (recomendado)
+
+Passe `--agent` para amarrar o servidor a um id:
+
+```bash
+agent-memory mcp --root /caminho/meu-backend --agent AGENT-01
+```
+
+Com isso:
+
+- o agente é registrado (ou reanexado) na largada, sem o modelo precisar chamar `memory_register`;
+- o parâmetro `agent` **some de todas as ferramentas** — `memory_record` passa a exigir só `type` e `message`;
+- o id não pode ser forjado: passar `agent` de outro na chamada não redireciona a escrita.
+
+Sem isso, cada agente teria que inventar e lembrar o próprio id em toda chamada — e dois deles escolhendo `AGENT-01` compartilhariam estado sem ninguém perceber.
+
 ### Configuração no cliente
 
-A maioria dos clientes MCP (Claude Code, Codex, Cursor) usa o mesmo formato. Em `.mcp.json` na raiz do projeto:
+A maioria dos clientes MCP (Claude Code, Codex, Cursor) usa o mesmo formato. Em `.mcp.json` na raiz do projeto — **um id diferente por agente**:
 
 ```json
 {
   "mcpServers": {
     "agent-memory": {
       "command": "agent-memory",
-      "args": ["mcp", "--root", "/caminho/meu-backend"]
+      "args": ["mcp", "--root", "/caminho/meu-backend", "--agent", "AGENT-01"]
     }
   }
 }
@@ -330,8 +346,18 @@ A maioria dos clientes MCP (Claude Code, Codex, Cursor) usa o mesmo formato. Em 
 No Claude Code também é possível registrar pela CLI:
 
 ```bash
-claude mcp add agent-memory -- agent-memory mcp --root /caminho/meu-backend
+claude mcp add agent-memory -- agent-memory mcp --root /caminho/meu-backend --agent AGENT-01
 ```
+
+### Rodando vários agentes
+
+```bash
+cd /caminho/meu-backend
+agent-memory init --name "Meu Backend"
+agent-memory serve            # painel em http://127.0.0.1:4317
+```
+
+Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `--agent`: `AGENT-01`, `AGENT-02`, `AGENT-03`. Nada mais precisa ser coordenado — o `.agents/` é o ponto de encontro, e a detecção de sobreposição, as mensagens e o painel funcionam entre processos independentes.
 
 ### Ferramentas expostas
 

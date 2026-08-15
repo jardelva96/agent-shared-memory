@@ -141,3 +141,64 @@ test('invalid activity type and unknown tool are rejected', async () => {
     );
   });
 });
+
+test('a pinned agent id is dropped from every tool schema', async () => {
+  await withServer(async (_call, _methods, service) => {
+    await service.init('Pinned Project');
+    const methods = createMcpMethods(service, { agentId: 'AGENT-07' });
+
+    const listed = (await methods.get('tools/list')!(undefined)) as {
+      tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required?: string[] } }>;
+    };
+    for (const tool of listed.tools) {
+      assert.equal(tool.inputSchema.properties.agent, undefined, `${tool.name} still exposes agent`);
+      assert.ok(!(tool.inputSchema.required ?? []).includes('agent'), `${tool.name} still requires agent`);
+    }
+    // Parameters that are not the identity must survive untouched.
+    const send = listed.tools.find(t => t.name === 'memory_send')!;
+    assert.deepEqual(send.inputSchema.required, ['to', 'message']);
+
+    const negotiated = (await methods.get('initialize')!({})) as { instructions: string };
+    assert.match(negotiated.instructions, /You are AGENT-07/);
+  });
+});
+
+test('a pinned server acts as its own agent without being told', async () => {
+  await withServer(async (_call, _methods, service) => {
+    await service.init('Pinned Project');
+    await service.register('AGENT-07');
+    const methods = createMcpMethods(service, { agentId: 'AGENT-07' });
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      (await methods.get('tools/call')!({ name, arguments: args })) as ToolResult;
+
+    const recorded = await call('memory_record', {
+      type: 'INTENT',
+      message: 'sem passar id',
+      pointer: 'src/Auth.cs::Auth.Validate()'
+    });
+    assert.match(recorded.content[0].text, /INTENT recorded for AGENT-07/);
+
+    const state = await service.store.readState('AGENT-07');
+    assert.equal(state.current?.description, 'sem passar id');
+  });
+});
+
+test('a pinned id cannot be impersonated by the caller', async () => {
+  await withServer(async (_call, _methods, service) => {
+    await service.init('Pinned Project');
+    await service.register('AGENT-07');
+    await service.register('AGENT-08');
+    const methods = createMcpMethods(service, { agentId: 'AGENT-07' });
+
+    // Passing someone else's id must not redirect the write.
+    await methods.get('tools/call')!({
+      name: 'memory_record',
+      arguments: { agent: 'AGENT-08', type: 'CHANGED', message: 'tentativa de personificacao' }
+    });
+
+    const victim = await service.store.readState('AGENT-08');
+    assert.notEqual(victim.current?.description, 'tentativa de personificacao');
+    const owner = await service.store.readState('AGENT-07');
+    assert.equal(owner.current?.description, 'tentativa de personificacao');
+  });
+});

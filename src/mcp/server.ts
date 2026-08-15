@@ -1,6 +1,7 @@
+import { configExists } from '../core/config.js';
 import { AgentMemoryService } from '../core/service.js';
 import { INVALID_PARAMS, MethodMap, RpcError, StdioServer } from './jsonrpc.js';
-import { callTool, TOOLS } from './tools.js';
+import { buildTools, callTool, ToolDefinition } from './tools.js';
 
 export const SERVER_NAME = 'agent-shared-memory';
 /** Keep in sync with package.json: dist/ has no package.json to read it from. */
@@ -23,8 +24,15 @@ const INSTRUCTIONS = [
   'When memory_status reports unread messages, call memory_inbox before continuing.'
 ].join('\n');
 
-export function createMcpMethods(service: AgentMemoryService): MethodMap {
+export interface McpOptions {
+  /** Fixes the identity for this connection, removing `agent` from every tool schema. */
+  agentId?: string;
+}
+
+export function createMcpMethods(service: AgentMemoryService, options: McpOptions = {}): MethodMap {
   const methods: MethodMap = new Map();
+  const pinned = options.agentId;
+  const tools: ToolDefinition[] = buildTools(pinned);
 
   methods.set('initialize', async params => {
     const requested = (params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
@@ -36,7 +44,9 @@ export function createMcpMethods(service: AgentMemoryService): MethodMap {
       protocolVersion,
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: INSTRUCTIONS
+      instructions: pinned
+        ? `${INSTRUCTIONS}\n\nYou are ${pinned}. Your identity is fixed by this connection, so no tool takes an agent id.`
+        : INSTRUCTIONS
     };
   });
 
@@ -44,12 +54,12 @@ export function createMcpMethods(service: AgentMemoryService): MethodMap {
   methods.set('notifications/cancelled', async () => undefined);
   methods.set('ping', async () => ({}));
 
-  methods.set('tools/list', async () => ({ tools: TOOLS }));
+  methods.set('tools/list', async () => ({ tools }));
 
   methods.set('tools/call', async params => {
-    const { name, args } = readCallParams(params);
+    const { name, args } = readCallParams(params, tools);
     try {
-      const text = await callTool(service, name, args);
+      const text = await callTool(service, name, args, pinned);
       return { content: [{ type: 'text', text }] };
     } catch (error) {
       if (error instanceof RpcError) throw error;
@@ -64,17 +74,41 @@ export function createMcpMethods(service: AgentMemoryService): MethodMap {
   return methods;
 }
 
-export function startMcpServer(service: AgentMemoryService): void {
-  new StdioServer(createMcpMethods(service)).start();
-  process.stderr.write(`${SERVER_NAME} ${SERVER_VERSION} listening on stdio (root: ${service.root})\n`);
+export async function startMcpServer(service: AgentMemoryService, options: McpOptions = {}): Promise<void> {
+  const pinned = options.agentId;
+
+  if (pinned && (await configExists(service.root))) {
+    // Claim the identity up front so the model never has to register itself, and so a
+    // reconnect re-attaches to the same history instead of failing on a duplicate id.
+    try {
+      if (await service.store.stateExists(pinned)) {
+        await service.heartbeat(pinned);
+      } else {
+        await service.register(pinned);
+      }
+    } catch (error) {
+      process.stderr.write(`warning: could not claim ${pinned}: ${describe(error)}\n`);
+    }
+  }
+
+  new StdioServer(createMcpMethods(service, options)).start();
+  const who = pinned ? ` as ${pinned}` : '';
+  process.stderr.write(`${SERVER_NAME} ${SERVER_VERSION} listening on stdio${who} (root: ${service.root})\n`);
 }
 
-function readCallParams(params: unknown): { name: string; args: Record<string, unknown> } {
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function readCallParams(
+  params: unknown,
+  tools: ToolDefinition[]
+): { name: string; args: Record<string, unknown> } {
   const source = (params ?? {}) as { name?: unknown; arguments?: unknown };
   if (typeof source.name !== 'string' || !source.name) {
     throw new RpcError(INVALID_PARAMS, 'tools/call requires a "name" string.');
   }
-  if (!TOOLS.some(tool => tool.name === source.name)) {
+  if (!tools.some(tool => tool.name === source.name)) {
     throw new RpcError(INVALID_PARAMS, `Unknown tool: ${source.name}`);
   }
   const args =

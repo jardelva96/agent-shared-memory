@@ -24,6 +24,37 @@ export interface ToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+/**
+ * When the server is started with --agent, the id is fixed for the whole connection and
+ * the `agent` parameter disappears from every schema. That removes the failure mode where
+ * a model invents its own id, forgets it mid-session, or collides with another agent.
+ */
+export function buildTools(pinnedAgent?: string): ToolDefinition[] {
+  if (!pinnedAgent) return TOOLS;
+
+  return TOOLS.map(tool => {
+    // `properties` and `required` are rebuilt, never spread from the original: spreading
+    // would carry a stale `required: ["agent"]` through when the filter empties it.
+    const { properties: original = {}, required = [], ...rest } = tool.inputSchema as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    const properties = { ...original };
+    delete properties.agent;
+    const stillRequired = required.filter(name => name !== 'agent');
+
+    return {
+      ...tool,
+      description: tool.description.replace(/Your agent id[^.]*\./g, '').trim(),
+      inputSchema: {
+        ...rest,
+        properties,
+        ...(stillRequired.length > 0 ? { required: stillRequired } : {})
+      }
+    };
+  });
+}
+
 export const TOOLS: ToolDefinition[] = [
   {
     name: 'memory_status',
@@ -159,7 +190,8 @@ export const TOOLS: ToolDefinition[] = [
 export async function callTool(
   service: AgentMemoryService,
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  pinnedAgent?: string
 ): Promise<string> {
   if (!(await configExists(service.root))) {
     throw new Error(
@@ -167,18 +199,24 @@ export async function callTool(
     );
   }
 
+  // A pinned id always wins: the connection owns the identity, not the caller.
+  const agentId = (): string => {
+    if (pinnedAgent) return pinnedAgent;
+    return requiredString(args, 'agent');
+  };
+
   switch (name) {
     case 'memory_status':
-      return statusText(service, optionalString(args, 'pointer'), optionalString(args, 'agent'));
+      return statusText(service, optionalString(args, 'pointer'), pinnedAgent ?? optionalString(args, 'agent'));
     case 'memory_read':
       return service.store.readSharedMemory();
     case 'memory_register':
-      return registerText(service, requiredString(args, 'agent'), optionalString(args, 'role'), optionalString(args, 'task'));
+      return registerText(service, agentId(), optionalString(args, 'role'), optionalString(args, 'task'));
     case 'memory_record':
-      return recordText(service, args);
+      return recordText(service, agentId(), args);
     case 'memory_send': {
       const message = await service.sendMessage({
-        from: requiredString(args, 'agent'),
+        from: agentId(),
         to: requiredString(args, 'to'),
         body: requiredString(args, 'message'),
         pointer: parsePointer(optionalString(args, 'pointer'))
@@ -186,9 +224,9 @@ export async function callTool(
       return `Delivered to ${message.to}.`;
     }
     case 'memory_inbox':
-      return inboxText(service, args);
+      return inboxText(service, agentId(), args);
     case 'memory_heartbeat': {
-      const state = await service.heartbeat(requiredString(args, 'agent'));
+      const state = await service.heartbeat(agentId());
       return `Heartbeat recorded for ${state.id} at ${state.lastHeartbeatAt}.`;
     }
     case 'memory_log':
@@ -249,8 +287,11 @@ async function registerText(
   return `Registered ${state.id} (session ${state.sessionId}). History: .agents/history/${state.id}.md`;
 }
 
-async function recordText(service: AgentMemoryService, args: Record<string, unknown>): Promise<string> {
-  const agentId = requiredString(args, 'agent');
+async function recordText(
+  service: AgentMemoryService,
+  agentId: string,
+  args: Record<string, unknown>
+): Promise<string> {
   const type = requiredString(args, 'type').toUpperCase() as ActivityType;
   if (!RECORDABLE.includes(type)) {
     throw new RpcError(INVALID_PARAMS, `Invalid type: ${type}. Expected one of ${RECORDABLE.join(', ')}.`);
@@ -305,8 +346,11 @@ function agentBlock(state: AgentState, config: ProjectConfig, unread = 0): strin
   return lines;
 }
 
-async function inboxText(service: AgentMemoryService, args: Record<string, unknown>): Promise<string> {
-  const agentId = requiredString(args, 'agent');
+async function inboxText(
+  service: AgentMemoryService,
+  agentId: string,
+  args: Record<string, unknown>
+): Promise<string> {
   const result = await service.readInbox(agentId, { markRead: args.peek !== true });
   const shown = args.all === true ? result.messages : result.unread;
 
