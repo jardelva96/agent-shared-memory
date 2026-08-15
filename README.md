@@ -307,6 +307,25 @@ O comando roda com `cwd` na raiz do projeto, então use `--root .` ao chamar a p
 
 Exit 0 conclui a tarefa; qualquer outro código a marca como `FAILED`, guardando a saída. Um comando travado é morto por `--timeout` (padrão: a duração do claim), **junto com toda a árvore de processos** — matar só o shell deixaria o comando real vivo como neto.
 
+### Executores prontos
+
+Escrever o executor do zero é o passo mais chato. O projeto traz dois:
+
+```bash
+# CLI de agente que le stdin (claude -p e afins)
+TASK_AGENT_CMD="claude -p" \
+  agent-memory run --agent WORKER --exec "node examples/task-agent.mjs"
+
+# modelo local via API do Ollama
+agent-memory run --agent WORKER --exec "node examples/task-agent-ollama.mjs"
+```
+
+Ambos leem a tarefa do ambiente, escrevem o entregável em `outputs/<id>.md` e saem com 0 ou 1, que é o que a fila usa para marcar `DONE` ou `FAILED`.
+
+O `task-agent.mjs` entrega o prompt pelo **stdin** do agente, não por argumento: título e detalhe são escritos por outro agente, e stdin não tem regras de quoting nem metacaracteres para atrapalhar. Ele também aceita `TASK_AGENT_DELEGATE=1`, e aí o agente decide se divide a tarefa e enfileira filhas com `--parent` — a profundidade é imposta pela fila, não pela boa vontade do modelo.
+
+> Um CLI que **anima a saída** (spinner, redesenho de linha) não sobrevive a um pipe: o texto capturado vem com pedaços de linhas meio desenhadas. Foi por isso que a versão do Ollama usa a API HTTP em vez de `ollama run`. Se o seu agente tiver modo não-interativo ou API, prefira.
+
 ### Agendamento
 
 ```bash
