@@ -219,3 +219,60 @@ test('a dependency on a task that does not exist is refused at creation', async 
     );
   });
 });
+
+test('the gate stays shut: a rejected review is re-armed for the redone work', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'implementar mediana',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'QA'
+    });
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+    const review = (await service.claimTask('QA'))!;
+    await service.finishTask(review.id, 'FAILED', 'o arquivo nao existe', 'QA');
+
+    // The work is back in the queue, and nothing is reviewable while it is unfinished.
+    assert.equal((await service.tasks.read(work.id)).status, 'OPEN');
+    assert.equal(await service.claimTask('QA'), undefined, 'nothing to judge yet');
+
+    // Redoing it must put it back under review, not close it unwatched.
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'agora escrevi mesmo', 'DEV');
+    const second = await service.claimTask('QA');
+    assert.ok(second, 'the redone work is under review again');
+    assert.notEqual(second.id, review.id, 'a fresh review, so each objection stays readable');
+    assert.equal(second.reviewOf, work.id);
+
+    await service.finishTask(review.id, 'DONE', 'conferido', 'QA');
+    assert.equal((await service.tasks.read(work.id)).status, 'DONE');
+  });
+});
+
+test('endless rejection stops at the limit instead of billing forever', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'trabalho impossivel',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'QA'
+    });
+
+    // maxReviewRounds defaults to 3, so the third rejection is the one that stops it.
+    for (let round = 1; round <= 3; round++) {
+      await service.claimTask('DEV');
+      await service.finishTask(work.id, 'DONE', `tentativa ${round}`, 'DEV');
+      const review = await service.claimTask('QA');
+      assert.ok(review, `round ${round} is reviewable`);
+      await service.finishTask(review.id, 'FAILED', `ainda errado (${round})`, 'QA');
+    }
+
+    const settled = await service.tasks.read(work.id);
+    assert.equal(settled.status, 'FAILED', 'it stops rather than looping');
+    assert.equal(settled.reviewRounds, 3);
+    assert.match(settled.result!, /decisao humana/);
+    assert.equal(await service.claimTask('DEV'), undefined, 'and nobody picks it up again');
+  });
+});

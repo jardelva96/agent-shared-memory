@@ -504,15 +504,70 @@ export class AgentMemoryService {
 
     // Rejected: the work goes back to the queue carrying the reason, so whoever picks it
     // up next starts from the objection instead of repeating the same mistake.
+    const rounds = (work.reviewRounds ?? 0) + 1;
+    const { maxReviewRounds } = await this.config();
+    const now = nowIso();
+
+    // A doer that cannot satisfy its reviewer would otherwise trade rejections with it
+    // until someone notices the bill. Past the limit the work stops rather than looping,
+    // and a person decides whether the code or the objection is the thing that is wrong.
+    if (maxReviewRounds > 0 && rounds >= maxReviewRounds) {
+      work.status = 'FAILED';
+      work.reviewRounds = rounds;
+      work.result =
+        `revisao rejeitou ${rounds}x (limite maxReviewRounds=${maxReviewRounds}); ` +
+        `ultima objecao: ${result ?? 'sem motivo informado'}. Precisa de decisao humana.`;
+      work.finishedAt = now;
+      work.claimedBy = undefined;
+      work.claimExpiresAt = undefined;
+      work.updatedAt = now;
+      await this.tasks.write(work);
+      await this.store.appendActivity(
+        this.makeActivity({
+          agentId: review.claimedBy ?? review.createdBy,
+          type: 'TASK',
+          description: `revisao rejeitou ${work.id} pela ${rounds}a vez: parou no limite, aguarda decisao humana`,
+          pointer: work.pointer
+        }),
+        { history: false }
+      );
+      return;
+    }
+
     work.status = 'OPEN';
     work.claimedBy = undefined;
     work.claimedAt = undefined;
     work.claimExpiresAt = undefined;
     work.finishedAt = undefined;
+    work.reviewRounds = rounds;
     work.result = `revisao rejeitou (${review.id}): ${result ?? 'sem motivo informado'}`;
     work.detail = `${work.detail ?? ''}
 
 REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
+    work.updatedAt = now;
+    await this.tasks.write(work);
+
+    // The review that just rejected is spent, and nothing else would ever queue another:
+    // the redone work would close with no one looking at it, so the gate would open
+    // permanently after exactly one rejection -- the opposite of the point.
+    //
+    // A fresh review rather than reopening this one. Reopening would put it back to OPEN
+    // while its own runner is still exiting, and the exit code would then overwrite the
+    // rejection the agent just recorded -- turning a reject into an approval. Leaving each
+    // round closed also keeps the objections readable one by one.
+    const next = await this.createTask({
+      title: `Revisar (rodada ${rounds + 1}): ${work.title}`,
+      detail:
+        `Revise novamente a tarefa ${work.id}, que voltou para a fila depois da rodada ${rounds}. ` +
+        `Objecao anterior: ${result ?? 'sem motivo'}. Verifique de fato (leia o codigo, rode o que ` +
+        'houver para rodar). Conclua como DONE se estiver correto, ou FAILED com o motivo.',
+      createdBy: review.createdBy,
+      assignedTo: review.assignedTo ?? review.claimedBy,
+      pointer: work.pointer,
+      dependsOn: work.id,
+      reviewOf: work.id
+    });
+    work.reviewTaskId = next.id;
     work.updatedAt = nowIso();
     await this.tasks.write(work);
 
@@ -520,7 +575,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
       this.makeActivity({
         agentId: review.claimedBy ?? review.createdBy,
         type: 'TASK',
-        description: `revisao rejeitou ${work.id} e devolveu para a fila: ${result ?? 'sem motivo'}`,
+        description: `revisao rejeitou ${work.id} e devolveu para a fila (rodada ${rounds}): ${result ?? 'sem motivo'}`,
         pointer: work.pointer
       }),
       { history: false }

@@ -103,6 +103,8 @@ export interface AgentTask {
   reviewOf?: string;
   /** Set on a work task: the id of the review that must accept it. */
   reviewTaskId?: string;
+  /** Set on a work task: how many times a review has sent it back. */
+  reviewRounds?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -150,4 +152,10 @@ export interface ProjectConfig {
    * failed instead of returned to the queue. 0 disables the dead letter.
    */
   maxTaskAttempts: number;
+  /**
+   * How many times a review may reject the same work before it is failed for a human
+   * instead of requeued. Two agents that disagree would otherwise trade rejections
+   * forever, spending real money on every round. 0 disables the limit.
+   */
+  maxReviewRounds: number;
 }
