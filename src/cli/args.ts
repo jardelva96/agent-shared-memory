@@ -4,21 +4,42 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
+/**
+ * Flags that never take a value. Without this list a boolean flag placed before the
+ * command would swallow it: `--json status` would parse as json="status" and leave no
+ * command at all.
+ */
+const BOOLEAN_FLAGS = new Set([
+  'json',
+  'force',
+  'history',
+  'dry-run',
+  'once',
+  'all',
+  'peek',
+  'help'
+]);
+
+/**
+ * The command is the first bare word, wherever it appears, so global flags work on either
+ * side of it: `agent-memory --root X status` and `agent-memory status --root X` are the
+ * same. Flag values are consumed before the search, so `--root status` does not mistake
+ * the path for the command.
+ */
 export function parseArgs(argv: string[]): ParsedArgs {
-  const [command, ...rest] = argv;
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
 
-  for (let i = 0; i < rest.length; i++) {
-    const item = rest[i];
+  for (let i = 0; i < argv.length; i++) {
+    const item = argv[i];
     if (!item.startsWith('--')) {
       positionals.push(item);
       continue;
     }
 
     const key = item.slice(2);
-    const next = rest[i + 1];
-    if (next && !next.startsWith('--')) {
+    const next = argv[i + 1];
+    if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('--')) {
       flags[key] = next;
       i++;
     } else {
@@ -26,6 +47,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
+  const command = positionals.shift();
   return { command, positionals, flags };
 }
 

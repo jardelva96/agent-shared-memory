@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "agent-memory": {
+      "command": "node",
+      "args": [
+        "dist/cli/main.js",
+        "mcp",
+        "--root",
+        ".",
+        "--agent",
+        "AGENT-01"
+      ]
+    }
+  }
+}
