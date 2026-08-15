@@ -173,6 +173,12 @@ export const TOOLS: ToolDefinition[] = [
         title: { type: 'string', description: 'What needs doing, in one precise line.' },
         detail: { type: 'string', description: 'Everything the executor needs to start without asking.' },
         for: { type: 'string', description: 'Agent id that must do it. Omit to leave it open to anyone.' },
+        review_by: {
+          type: 'string',
+          description:
+            'Agent that must review the work before it counts as finished. Queues a linked review ' +
+            'task that unblocks when the work lands; if the reviewer rejects, the work returns to the queue.'
+        },
         pointer: { type: 'string', description: 'Optional "file::symbol::parameter" the task is about.' }
       },
       required: ['agent', 'title']
@@ -288,12 +294,14 @@ export async function callTool(
         detail: optionalString(args, 'detail'),
         assignedTo: optionalString(args, 'for'),
         pointer: parsePointer(optionalString(args, 'pointer')),
+        reviewBy: optionalString(args, 'review_by'),
         // Set when this server was launched by a runner: the queue then knows this task
         // is one generation deeper, and the depth limit applies without the model
         // having to be aware of it at all.
         parentTaskId: process.env.AGENT_TASK_ID || undefined
       });
-      return `Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''} at depth ${task.depth}.`;
+      const review = task.reviewTaskId ? ` Review queued as ${task.reviewTaskId}.` : '';
+      return `Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''} at depth ${task.depth}.${review}`;
     }
     case 'memory_task_list': {
       const statusFilter = optionalString(args, 'status');

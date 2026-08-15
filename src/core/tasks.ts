@@ -101,8 +101,15 @@ export class TaskStore {
         await this.write(task);
       }
 
+      // A blocked task stays invisible to the queue rather than being handed out early.
+      // This is what lets a plan run before the work, and a review run after it, without
+      // anyone sequencing the waves by hand.
+      const done = new Set(tasks.filter(task => task.status === 'DONE').map(task => task.id));
       const candidate = tasks.find(
-        task => task.status === 'OPEN' && (!task.assignedTo || task.assignedTo === agentId)
+        task =>
+          task.status === 'OPEN' &&
+          (!task.assignedTo || task.assignedTo === agentId) &&
+          (!task.dependsOn || done.has(task.dependsOn))
       );
       if (!candidate) return undefined;
 

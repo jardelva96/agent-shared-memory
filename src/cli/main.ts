@@ -211,9 +211,12 @@ async function main(): Promise<void> {
           detail: stringFlag(parsed.flags, 'detail'),
           assignedTo: stringFlag(parsed.flags, 'for'),
           pointer: parsePointer(stringFlag(parsed.flags, 'pointer')),
-          parentTaskId: stringFlag(parsed.flags, 'parent')
+          parentTaskId: stringFlag(parsed.flags, 'parent'),
+          dependsOn: stringFlag(parsed.flags, 'depends-on'),
+          reviewBy: stringFlag(parsed.flags, 'review-by')
         });
         console.log(`Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`);
+        if (task.reviewTaskId) console.log(`Review queued as ${task.reviewTaskId}, blocked until the work lands`);
         break;
       }
       if (sub === 'claim') {

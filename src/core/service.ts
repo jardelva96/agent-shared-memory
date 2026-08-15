@@ -65,6 +65,12 @@ export interface CreateTaskInput {
   /** Set when a runner creates a task while executing one, to bound spawn depth. */
   parentTaskId?: string;
   scheduleId?: string;
+  /** The task is not claimable until this one is DONE. */
+  dependsOn?: string;
+  /** Queue a linked review task for this agent, unblocked when the work lands. */
+  reviewBy?: string;
+  /** Marks this task as the review of another. */
+  reviewOf?: string;
 }
 
 export interface CreateScheduleInput {
@@ -344,10 +350,32 @@ export class AgentMemoryService {
       depth,
       parentTaskId: input.parentTaskId,
       scheduleId: input.scheduleId,
+      dependsOn: input.dependsOn,
+      reviewOf: input.reviewOf,
       createdAt: now,
       updatedAt: now
     };
     await this.tasks.write(task);
+
+    if (input.reviewBy) {
+      // Created here rather than by the executor: the reviewer must exist from the start,
+      // so work cannot quietly close without anyone having looked at it.
+      const review = await this.createTask({
+        title: `Revisar: ${input.title}`,
+        detail:
+          `Revise o trabalho da tarefa ${task.id}. Verifique de fato (leia o codigo, rode o que ` +
+          'houver para rodar). Conclua a revisao como DONE se estiver correto, ou FAILED com o ' +
+          'motivo, o que devolve o trabalho para a fila.',
+        createdBy: input.createdBy,
+        assignedTo: input.reviewBy,
+        pointer: input.pointer,
+        dependsOn: task.id,
+        reviewOf: task.id
+      });
+      task.reviewTaskId = review.id;
+      task.updatedAt = nowIso();
+      await this.tasks.write(task);
+    }
 
     await this.store.appendActivity(
       this.makeActivity({
@@ -392,8 +420,26 @@ export class AgentMemoryService {
     return task;
   }
 
+  /**
+   * Closes a task and settles anything waiting on it.
+   *
+   * A review that rejects sends the work back to the queue with the reason attached,
+   * which is the point of separating who does the work from who checks it: "done" stops
+   * being self-declared. A review whose work failed has nothing left to judge, so it is
+   * cancelled rather than left blocking the queue forever.
+   */
   async finishTask(id: string, status: TaskStatus, result?: string, by?: string): Promise<AgentTask> {
     const task = await this.tasks.finish(id, status, result, by);
+
+    if (task.reviewOf) {
+      await this.settleReview(task, status, result);
+    } else if (status !== 'DONE' && task.reviewTaskId) {
+      // The work did not land, so its review has nothing to judge.
+      await this.tasks
+        .finish(task.reviewTaskId, 'CANCELLED', `trabalho ${task.id} terminou como ${status}`)
+        .catch(() => undefined);
+    }
+
     const actor = task.claimedBy ?? task.createdBy;
     await this.store.appendActivity(
       this.makeActivity({
@@ -418,6 +464,54 @@ export class AgentMemoryService {
 
     await this.afterWrite();
     return task;
+  }
+
+  /** Applies a review verdict to the work it judged. */
+  private async settleReview(review: AgentTask, status: TaskStatus, result?: string): Promise<void> {
+    if (!review.reviewOf) return;
+    let work: AgentTask;
+    try {
+      work = await this.tasks.read(review.reviewOf);
+    } catch {
+      return; // The work was removed; nothing to settle.
+    }
+
+    if (status === 'DONE') {
+      await this.store.appendActivity(
+        this.makeActivity({
+          agentId: review.claimedBy ?? review.createdBy,
+          type: 'TASK',
+          description: `revisao aprovou ${work.id}: ${work.title}`,
+          pointer: work.pointer
+        }),
+        { history: false }
+      );
+      return;
+    }
+
+    // Rejected: the work goes back to the queue carrying the reason, so whoever picks it
+    // up next starts from the objection instead of repeating the same mistake.
+    work.status = 'OPEN';
+    work.claimedBy = undefined;
+    work.claimedAt = undefined;
+    work.claimExpiresAt = undefined;
+    work.finishedAt = undefined;
+    work.result = `revisao rejeitou (${review.id}): ${result ?? 'sem motivo informado'}`;
+    work.detail = `${work.detail ?? ''}
+
+REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
+    work.updatedAt = nowIso();
+    await this.tasks.write(work);
+
+    await this.store.appendActivity(
+      this.makeActivity({
+        agentId: review.claimedBy ?? review.createdBy,
+        type: 'TASK',
+        description: `revisao rejeitou ${work.id} e devolveu para a fila: ${result ?? 'sem motivo'}`,
+        pointer: work.pointer
+      }),
+      { history: false }
+    );
   }
 
   async createSchedule(input: CreateScheduleInput): Promise<TaskSchedule> {

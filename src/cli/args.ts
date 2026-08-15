@@ -59,6 +59,8 @@ const KNOWN_FLAGS = new Set([
   'max-tasks',
   'max-cost',
   'claim-seconds',
+  'review-by',
+  'depends-on',
   'max-attempts',
   'version'
 ]);

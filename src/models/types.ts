@@ -94,6 +94,12 @@ export interface AgentTask {
   depth: number;
   parentTaskId?: string;
   scheduleId?: string;
+  /** Not claimable until this task reaches DONE. */
+  dependsOn?: string;
+  /** Set on a review task: the id of the work it judges. */
+  reviewOf?: string;
+  /** Set on a work task: the id of the review that must accept it. */
+  reviewTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }
