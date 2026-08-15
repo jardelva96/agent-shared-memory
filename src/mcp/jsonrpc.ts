@@ -37,8 +37,15 @@ export class StdioServer {
   start(): void {
     const reader = createInterface({ input: process.stdin });
     reader.on('line', line => {
-      // Chained so requests are processed in arrival order.
-      this.queue = this.queue.then(() => this.handleLine(line));
+      // Chained so requests are processed in arrival order. The catch is what keeps the
+      // chain alive: a rejected queue would skip every .then() queued after it, and an
+      // unhandled rejection aborts the process outright on Node >= 20.
+      this.queue = this.queue
+        .then(() => this.handleLine(line))
+        .catch(error => {
+          const reason = error instanceof Error ? error.message : String(error);
+          process.stderr.write(`jsonrpc: failed to handle a line: ${reason}\n`);
+        });
     });
     reader.on('close', () => {
       process.exitCode = 0;
@@ -49,14 +56,27 @@ export class StdioServer {
     const text = line.trim();
     if (!text) return;
 
-    let message: JsonRpcMessage;
+    let parsed: unknown;
     try {
-      message = JSON.parse(text) as JsonRpcMessage;
+      parsed = JSON.parse(text);
     } catch {
       this.write({ jsonrpc: '2.0', id: null, error: { code: PARSE_ERROR, message: 'Parse error' } });
       return;
     }
 
+    // Valid JSON is not necessarily a request. `null`, a number, a string or an array
+    // carries no id to answer with, so it is refused here rather than read as a
+    // notification -- reading `.id` off `null` used to throw and poison the queue.
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      this.write({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: INVALID_REQUEST, message: 'Request must be a JSON object' }
+      });
+      return;
+    }
+
+    const message = parsed as JsonRpcMessage;
     const isNotification = message.id === undefined;
     const id = message.id ?? null;
 

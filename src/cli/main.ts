@@ -306,7 +306,8 @@ async function main(): Promise<void> {
         exec,
         intervalMs: (numberFlag(parsed.flags, 'interval') ?? 3) * 1000,
         timeoutMs: timeout * 1000,
-        ...(once ? {} : { maxTasks: numberFlag(parsed.flags, 'max-tasks') ?? 0 }),
+        ...(once ? {} : { maxTasks: numberFlag(parsed.flags, "max-tasks") ?? 0 }),
+        ...(numberFlag(parsed.flags, "max-cost") !== undefined ? { maxCostUsd: numberFlag(parsed.flags, "max-cost") } : {}),
         onEvent: (line: string) => console.log(line)
       };
 

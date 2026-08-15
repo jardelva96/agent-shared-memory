@@ -10,16 +10,25 @@ export interface OverlapPair {
   pointers: [CodePointer, CodePointer];
 }
 
-export function detectConflicts(states: AgentState[], requesterId: string, pointer?: CodePointer): Conflict[] {
+export function detectConflicts(
+  states: AgentState[],
+  requesterId: string,
+  pointer?: CodePointer,
+  config?: ProjectConfig
+): Conflict[] {
   if (!pointer) return [];
   const conflicts: Conflict[] = [];
   for (const state of states) {
-    if (state.id === requesterId || !ACTIVE_STATUSES.has(state.status) || !state.current?.pointer) continue;
+    // Staleness is honoured when a config is supplied, so an agent that stopped sending
+    // heartbeats is not reported as an active clash here while the panel already shows it
+    // as OFFLINE. Without the config the raw status is used, which is the old behaviour.
+    const status = config ? effectiveStatus(state, config) : state.status;
+    if (state.id === requesterId || !ACTIVE_STATUSES.has(status) || !state.current?.pointer) continue;
     const relation = pointersOverlap(pointer, state.current.pointer);
     if (!relation.overlap) continue;
     conflicts.push({
       agentId: state.id,
-      status: state.status,
+      status: config ? effectiveStatus(state, config) : state.status,
       task: state.task,
       pointer: state.current.pointer,
       description: state.current.description,

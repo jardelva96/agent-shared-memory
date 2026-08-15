@@ -253,7 +253,8 @@ export class AgentMemoryService {
   async activity(input: ActivityInput): Promise<ActivityResult> {
     const state = await this.requireAgent(input.agentId);
     const states = await this.store.listStates();
-    const conflicts = detectConflicts(states, input.agentId, input.pointer);
+    const config = await this.config();
+    const conflicts = detectConflicts(states, input.agentId, input.pointer, config);
     const now = nowIso();
     const activity = this.makeActivity({ ...input, task: input.task ?? state.task }, now);
     const status = input.status ?? statusFor(input.type, state.status);
@@ -275,7 +276,7 @@ export class AgentMemoryService {
     await this.store.writeState(next);
     await this.store.appendActivity(activity);
     await this.notifyDependency(input, state);
-    await this.afterWrite();
+    await this.afterWrite(config);
     return { activity, state: next, conflicts };
   }
 
@@ -391,8 +392,8 @@ export class AgentMemoryService {
     return task;
   }
 
-  async finishTask(id: string, status: TaskStatus, result?: string): Promise<AgentTask> {
-    const task = await this.tasks.finish(id, status, result);
+  async finishTask(id: string, status: TaskStatus, result?: string, by?: string): Promise<AgentTask> {
+    const task = await this.tasks.finish(id, status, result, by);
     const actor = task.claimedBy ?? task.createdBy;
     await this.store.appendActivity(
       this.makeActivity({

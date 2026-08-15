@@ -100,10 +100,22 @@ export class TaskStore {
     });
   }
 
-  async finish(id: string, status: TaskStatus, result?: string): Promise<AgentTask> {
+  /**
+   * Closes a task. When `by` is given, only the holder of the claim may close it.
+   *
+   * A runner whose lease expired has already had the task handed to someone else; letting
+   * it write the result anyway would overwrite the new holder's work with the output of a
+   * run everyone had given up on.
+   */
+  async finish(id: string, status: TaskStatus, result?: string, by?: string): Promise<AgentTask> {
     const p = this.paths;
     return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
       const task = await this.read(id);
+      if (by && task.claimedBy && task.claimedBy !== by) {
+        throw new Error(
+          `${id} is held by ${task.claimedBy}, not ${by}. The claim expired and the task was reassigned.`
+        );
+      }
       const now = nowIso();
       task.status = status;
       task.result = result;

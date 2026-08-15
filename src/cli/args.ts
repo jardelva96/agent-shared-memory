@@ -26,6 +26,41 @@ const BOOLEAN_FLAGS = new Set([
  * same. Flag values are consumed before the search, so `--root status` does not mistake
  * the path for the command.
  */
+/** Every flag the CLI understands, so a typo fails instead of being ignored. */
+const KNOWN_FLAGS = new Set([
+  ...BOOLEAN_FLAGS,
+  'root',
+  'agent',
+  'role',
+  'task',
+  'name',
+  'stale',
+  'recent',
+  'auto-compact',
+  'keep',
+  'limit',
+  'message',
+  'description',
+  'pointer',
+  'reason',
+  'for',
+  'from',
+  'to',
+  'id',
+  'port',
+  'interval',
+  'status',
+  'title',
+  'detail',
+  'parent',
+  'cron',
+  'exec',
+  'timeout',
+  'max-tasks',
+  'max-cost',
+  'version'
+]);
+
 export function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -37,14 +72,36 @@ export function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
 
-    const key = item.slice(2);
-    const next = argv[i + 1];
-    if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('--')) {
-      flags[key] = next;
-      i++;
-    } else {
-      flags[key] = true;
+    // `--flag=value` is accepted so a value starting with "--" can still be passed.
+    const equals = item.indexOf('=');
+    const key = equals > 2 ? item.slice(2, equals) : item.slice(2);
+    const inlineValue = equals > 2 ? item.slice(equals + 1) : undefined;
+
+    if (!KNOWN_FLAGS.has(key)) {
+      throw new Error(`Unknown flag: --${key}. Run "agent-memory help" to see the accepted flags.`);
     }
+
+    if (BOOLEAN_FLAGS.has(key)) {
+      // An explicit value has to be honoured, in either form. Swallowing it and forcing
+      // true meant `compact --history false` rotated every history the user just said not
+      // to touch, and `register --force false` reset a live agent.
+      const spaced = inlineValue === undefined && isBooleanWord(argv[i + 1]) ? argv[++i] : undefined;
+      const value = inlineValue ?? spaced;
+      flags[key] = value === undefined ? true : value !== 'false' && value !== '0';
+      continue;
+    }
+
+    if (inlineValue !== undefined) {
+      flags[key] = inlineValue;
+      continue;
+    }
+
+    const next = argv[i + 1];
+    if (next === undefined || next.startsWith('--')) {
+      throw new Error(`--${key} needs a value. Use --${key}=<value> if the value starts with "--".`);
+    }
+    flags[key] = next;
+    i++;
   }
 
   const command = positionals.shift();
@@ -56,9 +113,13 @@ export function stringFlag(flags: ParsedArgs['flags'], name: string): string | u
   return typeof value === 'string' ? value : undefined;
 }
 
+function isBooleanWord(value: string | undefined): boolean {
+  return value === 'true' || value === 'false' || value === '1' || value === '0';
+}
+
 export function boolFlag(flags: ParsedArgs['flags'], name: string): boolean {
   const value = flags[name];
-  if (value === true) return true;
+  if (typeof value === 'boolean') return value;
   return typeof value === 'string' && value.toLowerCase() === 'true';
 }
 

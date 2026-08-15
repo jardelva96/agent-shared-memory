@@ -11,6 +11,8 @@ export interface RunnerOptions {
   /** Stop after this many tasks; 0 means run until interrupted. */
   maxTasks?: number;
   timeoutMs?: number;
+  /** Stop once the accumulated cost passes this, so a cascade cannot drain a session. */
+  maxCostUsd?: number;
   onEvent?: (line: string) => void;
 }
 
@@ -19,6 +21,8 @@ export interface RunOutcome {
   status: 'DONE' | 'FAILED';
   exitCode: number | null;
   output: string;
+  /** Parsed from the executor output when it reports one, for budget accounting. */
+  costUsd?: number;
 }
 
 const OUTPUT_LIMIT = 2000;
@@ -75,11 +79,13 @@ export async function executeTask(
       settled = true;
       if (timer) clearTimeout(timer);
       const tail = output.trim().slice(-OUTPUT_LIMIT);
+      const combined = [note, tail].filter(Boolean).join(' ');
       resolve({
         task,
         status: exitCode === 0 && !timedOut ? 'DONE' : 'FAILED',
         exitCode,
-        output: [note, tail].filter(Boolean).join(' ')
+        output: combined,
+        costUsd: readCost(combined)
       });
     };
 
@@ -111,6 +117,7 @@ export async function runQueue(
   const log = options.onEvent ?? (() => undefined);
   const interval = options.intervalMs ?? 3000;
   const outcomes: RunOutcome[] = [];
+  let spent = 0;
 
   while (!shouldStop()) {
     const task = await service.claimTask(options.agentId);
@@ -123,9 +130,22 @@ export async function runQueue(
 
     log(`claimed ${task.id}: ${task.title}`);
     const outcome = await executeTask(service, task, options);
-    await service.finishTask(task.id, outcome.status, summarise(outcome));
+    // Recorded before finishing: a throw from finishTask (a lost claim, a contended
+    // lock) must not discard work that already ran and already cost money.
     outcomes.push(outcome);
-    log(`${outcome.status.toLowerCase()} ${task.id} (exit ${outcome.exitCode ?? 'n/a'})`);
+
+    try {
+      await service.finishTask(task.id, outcome.status, summarise(outcome), options.agentId);
+      log(`${outcome.status.toLowerCase()} ${task.id} (exit ${outcome.exitCode ?? 'n/a'})`);
+    } catch (error) {
+      log(`${task.id} ran but could not be closed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    spent += outcome.costUsd ?? 0;
+    if (options.maxCostUsd !== undefined && options.maxCostUsd > 0 && spent >= options.maxCostUsd) {
+      log(`cost limit reached ($${spent.toFixed(4)} of $${options.maxCostUsd.toFixed(2)}); stopping`);
+      return outcomes;
+    }
 
     if (options.maxTasks !== undefined && options.maxTasks > 0 && outcomes.length >= options.maxTasks) {
       return outcomes;
@@ -164,6 +184,12 @@ function killTree(pid: number | undefined): void {
  */
 function expandCommand(exec: string, task: AgentTask): string {
   return exec.replaceAll('{{task_id}}', task.id).replaceAll('{{task_depth}}', String(task.depth));
+}
+
+/** Executors report spend as "custo=$0.1234"; absent means the runner cannot budget. */
+function readCost(output: string): number | undefined {
+  const match = /custo=\$([0-9.]+)/.exec(output);
+  return match ? Number(match[1]) : undefined;
 }
 
 function summarise(outcome: RunOutcome): string {
