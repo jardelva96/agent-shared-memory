@@ -7,6 +7,8 @@ import { nextOccurrence, parseCron } from './cron.js';
 import { resolvePaths } from './paths.js';
 
 const ACTIVE: TaskStatus[] = ['OPEN', 'CLAIMED'];
+/** A verdict has been given; nothing may overwrite it. */
+const TERMINAL: TaskStatus[] = ['DONE', 'FAILED', 'CANCELLED'];
 
 export interface TaskFilter {
   status?: TaskStatus[];
@@ -135,6 +137,13 @@ export class TaskStore {
     const p = this.paths;
     return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
       const task = await this.read(id);
+
+      // An agent that closed its own task through the tools has already given the verdict.
+      // The runner then calls finish again from the exit code, and a process that exits 0
+      // after recording FAILED would flip it back to DONE — which silently defeats the
+      // review gate, since a rejected review would never return the work to the queue.
+      if (TERMINAL.includes(task.status)) return task;
+
       if (by && task.claimedBy && task.claimedBy !== by) {
         throw new Error(
           `${id} is held by ${task.claimedBy}, not ${by}. The claim expired and the task was reassigned.`

@@ -115,3 +115,27 @@ test('a review is cancelled when the work it would judge failed', async () => {
     assert.equal(await service.claimTask('QA'), undefined, 'nothing left blocking the queue');
   });
 });
+
+test('a verdict already recorded by the agent is not overwritten by the runner', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'trabalho',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'QA'
+    });
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    const review = work.reviewTaskId!;
+    await service.claimTask('QA');
+
+    // The agent records its own verdict through the tools...
+    await service.finishTask(review, 'FAILED', 'nao compila', 'QA');
+    // ...and the runner then closes the same task from a zero exit code.
+    await service.finishTask(review, 'DONE', 'exit 0', 'QA');
+
+    assert.equal((await service.tasks.read(review)).status, 'FAILED', 'the agent verdict stands');
+    assert.equal((await service.tasks.read(work.id)).status, 'OPEN', 'so the work still went back');
+  });
+});
