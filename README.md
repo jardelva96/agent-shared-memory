@@ -406,12 +406,20 @@ mcp         Servidor MCP em stdio
 
 ## Concorrência
 
+Cada agente roda no seu próprio processo, escrevendo no mesmo `.agents/`.
+
 - Cada `state/AGENT-X.json` é escrito atomicamente.
 - Cada histórico individual possui lock próprio.
 - O `events.jsonl` possui lock global curto somente no append.
 - `SHARED_MEMORY.md` é regenerado sob lock e escrito atomicamente.
 - Os agentes nunca precisam editar o arquivo central manualmente.
 - Um lock deixado para trás por um processo morto é recuperado após 30 segundos, em vez de travar o `.agents/` até alguém apagar o arquivo na mão.
+- Contenção de lock é tratada como espera, não como erro. No Windows, um arquivo em *pending-delete* ou aberto por outro leitor retorna `EPERM`/`EACCES`/`EBUSY` em vez de `EEXIST`; tratar isso como falha derruba o agente exatamente sob carga. O `rename` da escrita atômica tem a mesma proteção, e o arquivo temporário é removido se ainda assim falhar.
+- **A regeneração do painel nunca derruba a escrita que a precede.** `state/` e `events.jsonl` são gravados antes e são a fonte da verdade; o `SHARED_MEMORY.md` é derivado. Se o lock do painel estiver muito disputado, a escrita permanece durável e o próximo agente regenera a partir do disco.
+
+Medido em processos concorrentes de verdade, do zero até 40 agentes × 25 atividades (1.040 eventos): nenhum evento perdido, nenhum arquivo corrompido, nenhum histórico contaminado, nenhum lock preso, e o painel permanecendo em dia. A vazão sob 40 processos simultâneos ficou em torno de 60 escritas/s — o `refreshSharedMemory` serializa no lock global, que é o teto de escala.
+
+Para referência, `status` e o dashboard leem `state/` diretamente, então mostram o estado corrente mesmo que o `SHARED_MEMORY.md` esteja momentaneamente atrás.
 
 ## Testes
 

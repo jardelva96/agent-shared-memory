@@ -2,7 +2,7 @@ import { appendFile, readdir, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { AgentActivity, AgentState, ProjectConfig } from '../models/types.js';
 import { safeName } from '../utils/ids.js';
-import { atomicWrite, atomicWriteJson, ensureDir, readJson, withFileLock } from '../utils/fs.js';
+import { atomicWrite, atomicWriteJson, ensureDir, isLockTimeout, readJson, withFileLock } from '../utils/fs.js';
 import { resolvePaths } from './paths.js';
 import { renderActivity, renderAgentHeader, renderSessionBanner, renderSharedMemory } from './render.js';
 
@@ -195,15 +195,25 @@ export class MemoryStore {
     }
   }
 
+  /**
+   * Regenerates the central panel. Callers write state and the journal first, so this is
+   * derived data: if the lock is too contended to get, the write that just happened is
+   * still durable and the next agent to refresh picks it up from disk. Failing here would
+   * throw away work that already succeeded, which is the wrong trade under concurrency.
+   */
   async refreshSharedMemory(config: ProjectConfig): Promise<void> {
     const p = this.paths;
-    await withFileLock(path.join(p.locksDir, 'shared-memory.lock'), async () => {
-      const [states, recent] = await Promise.all([
-        this.listStates(),
-        this.recentActivities(config.recentHistoryLimit)
-      ]);
-      await atomicWrite(p.sharedMemoryFile, renderSharedMemory(states, recent, config));
-    });
+    try {
+      await withFileLock(path.join(p.locksDir, 'shared-memory.lock'), async () => {
+        const [states, recent] = await Promise.all([
+          this.listStates(),
+          this.recentActivities(config.recentHistoryLimit)
+        ]);
+        await atomicWrite(p.sharedMemoryFile, renderSharedMemory(states, recent, config));
+      });
+    } catch (error) {
+      if (!isLockTimeout(error)) throw error;
+    }
   }
 
   async readSharedMemory(): Promise<string> {
