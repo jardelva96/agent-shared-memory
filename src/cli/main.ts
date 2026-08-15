@@ -212,7 +212,7 @@ async function main(): Promise<void> {
           assignedTo: stringFlag(parsed.flags, 'for'),
           pointer: parsePointer(stringFlag(parsed.flags, 'pointer')),
           parentTaskId: stringFlag(parsed.flags, 'parent'),
-          dependsOn: stringFlag(parsed.flags, 'depends-on'),
+          dependsOn: stringFlag(parsed.flags, 'depends-on')?.split(',').map(id => id.trim()).filter(Boolean),
           reviewBy: stringFlag(parsed.flags, 'review-by')
         });
         console.log(`Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`);

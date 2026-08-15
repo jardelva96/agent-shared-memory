@@ -111,7 +111,7 @@ export class TaskStore {
         task =>
           task.status === 'OPEN' &&
           (!task.assignedTo || task.assignedTo === agentId) &&
-          (!task.dependsOn || done.has(task.dependsOn))
+          dependenciesOf(task).every(id => done.has(id))
       );
       if (!candidate) return undefined;
 
@@ -230,6 +230,12 @@ export class ScheduleStore {
   static computeNextRun(cron: string, after: Date = new Date()): string | undefined {
     return nextOccurrence(parseCron(cron), after)?.toISOString();
   }
+}
+
+/** Normalises the single-value form tasks written before dependsOn took a list. */
+export function dependenciesOf(task: AgentTask): string[] {
+  if (!task.dependsOn) return [];
+  return Array.isArray(task.dependsOn) ? task.dependsOn : [task.dependsOn];
 }
 
 /** Ids reach the filesystem as file names, so they are validated like agent ids. */

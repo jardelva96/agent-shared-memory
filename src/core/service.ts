@@ -65,8 +65,8 @@ export interface CreateTaskInput {
   /** Set when a runner creates a task while executing one, to bound spawn depth. */
   parentTaskId?: string;
   scheduleId?: string;
-  /** The task is not claimable until this one is DONE. */
-  dependsOn?: string;
+  /** The task is not claimable until every one of these is DONE. */
+  dependsOn?: string | string[];
   /** Queue a linked review task for this agent, unblocked when the work lands. */
   reviewBy?: string;
   /** Marks this task as the review of another. */

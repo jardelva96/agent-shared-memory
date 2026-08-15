@@ -139,3 +139,65 @@ test('a verdict already recorded by the agent is not overwritten by the runner',
     assert.equal((await service.tasks.read(work.id)).status, 'OPEN', 'so the work still went back');
   });
 });
+
+test('a synthesis waits for every part, not just the first', async () => {
+  await withProject(async service => {
+    const parts = [];
+    for (const title of ['parte 1', 'parte 2', 'parte 3']) {
+      parts.push(await service.createTask({ title, createdBy: 'LEAD', assignedTo: 'DEV' }));
+    }
+    const synthesis = await service.createTask({
+      title: 'conferir o conjunto',
+      createdBy: 'LEAD',
+      assignedTo: 'QA',
+      dependsOn: parts.map(p => p.id)
+    });
+
+    // Landing them one at a time must not release the synthesis early: reviewing two
+    // finished parts and one still in flight is exactly the hole this guards against.
+    for (const part of parts) {
+      assert.equal(await service.claimTask('QA'), undefined, `still blocked before ${part.title} landed`);
+      await service.claimTask('DEV');
+      await service.finishTask(part.id, 'DONE', 'ok', 'DEV');
+    }
+
+    assert.equal((await service.claimTask('QA'))?.id, synthesis.id, 'released once every part landed');
+  });
+});
+
+test('one failed part keeps the synthesis blocked rather than reviewing a hole', async () => {
+  await withProject(async service => {
+    const a = await service.createTask({ title: 'parte a', createdBy: 'LEAD', assignedTo: 'DEV' });
+    const b = await service.createTask({ title: 'parte b', createdBy: 'LEAD', assignedTo: 'DEV' });
+    await service.createTask({
+      title: 'conferir',
+      createdBy: 'LEAD',
+      assignedTo: 'QA',
+      dependsOn: [a.id, b.id]
+    });
+
+    await service.claimTask('DEV');
+    await service.finishTask(a.id, 'DONE', 'ok', 'DEV');
+    await service.claimTask('DEV');
+    await service.finishTask(b.id, 'FAILED', 'estourou', 'DEV');
+
+    assert.equal(await service.claimTask('QA'), undefined, 'nothing to synthesise from a failed part');
+  });
+});
+
+test('the single-value form still works for tasks written before the list', async () => {
+  await withProject(async service => {
+    const first = await service.createTask({ title: 'primeiro', createdBy: 'LEAD', assignedTo: 'DEV' });
+    const second = await service.createTask({ title: 'segundo', createdBy: 'LEAD', assignedTo: 'QA' });
+
+    // Written to disk the way older versions wrote it: a bare string, not a list.
+    const raw = await service.tasks.read(second.id);
+    (raw as { dependsOn?: unknown }).dependsOn = first.id;
+    await service.tasks.write(raw);
+
+    assert.equal(await service.claimTask('QA'), undefined, 'the old form still blocks');
+    await service.claimTask('DEV');
+    await service.finishTask(first.id, 'DONE', 'ok', 'DEV');
+    assert.equal((await service.claimTask('QA'))?.id, second.id, 'and still unblocks');
+  });
+});
