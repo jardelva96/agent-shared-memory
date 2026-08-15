@@ -35,6 +35,7 @@ export interface CompactResult {
   eventsArchived: number;
   eventsArchiveFile?: string;
   historyArchived: Array<{ agent: string; file: string }>;
+  messagesTrimmed: Array<{ agent: string; removed: number }>;
   dryRun: boolean;
 }
 
@@ -172,6 +173,7 @@ export class AgentMemoryService {
       eventsTotal,
       eventsArchived: 0,
       historyArchived: [],
+      messagesTrimmed: [],
       dryRun
     };
 
@@ -179,6 +181,10 @@ export class AgentMemoryService {
       result.eventsArchived = Math.max(0, eventsTotal - keep);
       if (options.history) {
         result.historyArchived = (await this.store.listHistoryAgents()).map(agent => ({ agent, file: '(dry run)' }));
+      }
+      for (const agent of await this.messages.listInboxes()) {
+        const total = (await this.messages.list(agent)).length;
+        if (total > keep) result.messagesTrimmed.push({ agent, removed: total - keep });
       }
       return result;
     }
@@ -194,6 +200,12 @@ export class AgentMemoryService {
         const file = await this.store.archiveHistory(agent, stamp);
         if (file) result.historyArchived.push({ agent, file });
       }
+    }
+
+    // Inboxes grow with every message; only already-read ones are safe to drop.
+    for (const agent of await this.messages.listInboxes()) {
+      const removed = await this.messages.trim(agent, keep);
+      if (removed > 0) result.messagesTrimmed.push({ agent, removed });
     }
 
     await this.store.refreshSharedMemory(await this.config());

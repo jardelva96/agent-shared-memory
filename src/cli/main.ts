@@ -88,6 +88,9 @@ async function main(): Promise<void> {
       for (const entry of result.historyArchived) {
         console.log(`${prefix} history for ${entry.agent}${result.dryRun ? '' : ` -> ${entry.file}`}`);
       }
+      for (const entry of result.messagesTrimmed) {
+        console.log(`${prefix} ${entry.removed} read message(s) from ${entry.agent}'s inbox`);
+      }
       if (result.dryRun) console.log('\nDry run: nothing was written.');
       break;
     }

@@ -139,6 +139,12 @@ agent-memory done \
 
 ## Ciclo de vida do agente
 
+### Formato do id
+
+Um id pode conter letras, dígitos, ponto, traço e sublinhado, com pelo menos uma letra ou dígito. Qualquer outra coisa é **recusada**, não corrigida.
+
+Isso é deliberado: o id vira nome de arquivo. Se `AGENT/01` fosse sanitizado para `AGENT-01`, os dois passariam a compartilhar estado, histórico e caixa de entrada — e `unregister("AGENT/01")` apagaria o registro do `AGENT-01`. Recusar é a única forma de garantir que os dados de um agente sejam dele.
+
 Ids são exclusivos: registrar um id que já existe falha, para que dois agentes diferentes não passem a compartilhar estado por acidente.
 
 Quando o processo de um agente reinicia, use `--force` para abrir uma sessão nova preservando o histórico:
@@ -175,6 +181,7 @@ agent-memory compact --keep 500 --history
 
 - os eventos além dos `--keep` mais recentes vão para `.agents/events/archive/`;
 - com `--history`, cada `history/AGENT-X.md` vai para `.agents/history/archive/` e um arquivo novo é aberto apontando para o arquivado;
+- cada caixa de entrada é reduzida a `--keep` mensagens, mas **somente as já lidas são descartadas** — uma mensagem que o destinatário ainda não viu nunca é removida, mesmo que isso deixe a caixa acima do limite;
 - `--dry-run` mostra o que seria feito sem escrever nada.
 
 ## Espera por outro agente

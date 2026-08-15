@@ -1,7 +1,7 @@
 import { appendFile, readdir, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { AgentActivity, AgentState, ProjectConfig } from '../models/types.js';
-import { safeName } from '../utils/ids.js';
+import { assertAgentId } from '../utils/ids.js';
 import { atomicWrite, atomicWriteJson, ensureDir, isLockTimeout, readJson, withFileLock } from '../utils/fs.js';
 import { resolvePaths } from './paths.js';
 import { renderActivity, renderAgentHeader, renderSessionBanner, renderSharedMemory } from './render.js';
@@ -32,8 +32,10 @@ export class MemoryStore {
   }
 
   async stateExists(agentId: string): Promise<boolean> {
+    // Resolved outside the try so an invalid id is reported instead of read as "absent".
+    const file = this.stateFile(agentId);
     try {
-      await readFile(this.stateFile(agentId), 'utf8');
+      await readFile(file, 'utf8');
       return true;
     } catch {
       return false;
@@ -84,7 +86,7 @@ export class MemoryStore {
       return;
     }
 
-    await withFileLock(path.join(p.locksDir, `${safeName(state.id)}.history.lock`), async () => {
+    await withFileLock(path.join(p.locksDir, `${assertAgentId(state.id)}.history.lock`), async () => {
       await appendFile(file, `${renderSessionBanner(state)}\n`, 'utf8');
     });
   }
@@ -106,7 +108,7 @@ export class MemoryStore {
   async archiveHistory(agentId: string, stamp: string): Promise<string | undefined> {
     const p = this.paths;
     const source = this.historyFile(agentId);
-    return withFileLock(path.join(p.locksDir, `${safeName(agentId)}.history.lock`), async () => {
+    return withFileLock(path.join(p.locksDir, `${assertAgentId(agentId)}.history.lock`), async () => {
       let existing: string;
       try {
         existing = await readFile(source, 'utf8');
@@ -114,7 +116,7 @@ export class MemoryStore {
         return undefined;
       }
       await ensureDir(p.historyArchiveDir);
-      const target = path.join(p.historyArchiveDir, `${safeName(agentId)}-${stamp}.md`);
+      const target = path.join(p.historyArchiveDir, `${assertAgentId(agentId)}-${stamp}.md`);
       await rename(source, target);
       const header = existing.split('\n---\n')[0].trimEnd();
       await atomicWrite(source, `${header}\n\n> Earlier entries archived in archive/${path.basename(target)}.\n`);
@@ -167,7 +169,7 @@ export class MemoryStore {
     await ensureDir(p.eventsDir);
 
     if (options.history !== false) {
-      await withFileLock(path.join(p.locksDir, `${safeName(activity.agentId)}.history.lock`), async () => {
+      await withFileLock(path.join(p.locksDir, `${assertAgentId(activity.agentId)}.history.lock`), async () => {
         await appendFile(this.historyFile(activity.agentId), `${renderActivity(activity)}\n`, 'utf8');
       });
     }
@@ -221,10 +223,10 @@ export class MemoryStore {
   }
 
   private stateFile(agentId: string): string {
-    return path.join(this.paths.stateDir, `${safeName(agentId)}.json`);
+    return path.join(this.paths.stateDir, `${assertAgentId(agentId)}.json`);
   }
 
   private historyFile(agentId: string): string {
-    return path.join(this.paths.historyDir, `${safeName(agentId)}.md`);
+    return path.join(this.paths.historyDir, `${assertAgentId(agentId)}.md`);
   }
 }

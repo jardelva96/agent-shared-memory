@@ -8,9 +8,23 @@ export function createSessionId(): string {
   return randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase();
 }
 
-/** Agent ids reach the filesystem as file names, so they must not carry path separators. */
-export function safeName(value: string): string {
-  const safe = value.trim().replace(/[^a-zA-Z0-9._-]/g, '-');
-  if (!safe) throw new Error('Invalid agent id');
-  return safe;
+const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
+
+/**
+ * Agent ids are used verbatim as file names, so they are validated rather than sanitised.
+ *
+ * Rewriting an unsafe id into a safe one makes distinct agents alias to the same files:
+ * "AGENT/01" and "AGENT-01" would share state, and unregistering one would delete the
+ * other. Rejecting the id is the only way to keep an agent's data its own.
+ */
+export function assertAgentId(value: string): string {
+  const id = value.trim();
+  if (!id) throw new Error('Agent id must not be empty.');
+  if (!SAFE_ID.test(id) || !/[a-zA-Z0-9]/.test(id)) {
+    throw new Error(
+      `Invalid agent id: ${JSON.stringify(value)}. Use letters, digits, dot, dash or underscore, ` +
+        'with at least one letter or digit. Ids become file names, so separators are not allowed.'
+    );
+  }
+  return id;
 }
