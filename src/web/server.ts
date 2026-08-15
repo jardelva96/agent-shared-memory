@@ -61,6 +61,15 @@ export async function startDashboard(
   const server = http.createServer(async (req, res) => {
     const url = (req.url ?? '/').split('?')[0];
     try {
+      // Binding to 127.0.0.1 keeps other machines out, but not a page on the open web
+      // that resolves its own hostname to 127.0.0.1 and then reads this port from the
+      // victim's browser. The Host header is what distinguishes the two.
+      if (!isLocalHost(req.headers.host)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('Forbidden: unexpected Host header. Open the dashboard at http://127.0.0.1.');
+        return;
+      }
+
       if (url === '/events') {
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -72,16 +81,26 @@ export async function startDashboard(
         clients.add(res);
         startPolling();
 
-        // The new client needs the current state, not just the next change. Recording the
-        // signature here keeps the next poll from pushing the same snapshot a second time.
-        const snapshot = await buildSnapshot(service);
-        lastSignature = signatureOf(snapshot);
-        res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
-
+        // Registered before anything that can fail. Registering it after the snapshot
+        // meant a rejected read left the response in the client set forever: the poller
+        // kept writing to a dead socket, and the outer catch tried to send a 500 on a
+        // response whose headers were already out, taking the process down with it.
         req.on('close', () => {
           clients.delete(res);
           if (clients.size === 0) stopPolling();
         });
+
+        try {
+          // The new client needs the current state, not just the next change.
+          const snapshot = await buildSnapshot(service);
+          // Only a snapshot every client has seen may set the shared signature. A new
+          // client arriving mid-change would otherwise mark it as already delivered and
+          // the agents already connected would never receive it.
+          if (clients.size === 1) lastSignature = signatureOf(snapshot);
+          res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+        } catch {
+          // The stream stays open; the next poll delivers the state.
+        }
         return;
       }
 
@@ -135,11 +154,35 @@ export async function startDashboard(
     clients.clear();
   });
 
+  // An SSE response never ends on its own, and `close()` waits for every connection to
+  // finish — so a dashboard with a browser open would hang instead of shutting down, and
+  // the 'close' handler above could never run. Release the streams first, then close.
+  const close = server.close.bind(server);
+  server.close = ((callback?: (error?: Error) => void) => {
+    stopPolling();
+    for (const client of clients) client.end();
+    clients.clear();
+    return close(callback);
+  }) as typeof server.close;
+
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => resolve());
   });
   return server;
+}
+
+/**
+ * Accepts only the loopback names a person can actually have typed.
+ *
+ * A missing Host is refused too: every real browser and fetch client sends one, so its
+ * absence is a hand-rolled request rather than the dashboard being used.
+ */
+function isLocalHost(host: string | undefined): boolean {
+  if (!host) return false;
+  // Strip the port; an IPv6 literal keeps its brackets.
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]';
 }
 
 /** Everything a viewer cares about, minus generatedAt — which changes on every build. */

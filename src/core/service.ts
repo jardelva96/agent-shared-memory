@@ -558,16 +558,35 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     });
 
     for (const schedule of due) {
-      created.push(
-        await this.createTask({
-          title: schedule.title,
-          detail: schedule.detail,
-          pointer: schedule.pointer,
-          assignedTo: schedule.assignedTo,
-          createdBy: schedule.createdBy,
-          scheduleId: schedule.id
-        })
-      );
+      try {
+        created.push(
+          await this.createTask({
+            title: schedule.title,
+            detail: schedule.detail,
+            pointer: schedule.pointer,
+            assignedTo: schedule.assignedTo,
+            createdBy: schedule.createdBy,
+            scheduleId: schedule.id
+          })
+        );
+      } catch (error) {
+        // nextRunAt has already advanced, so this occurrence cannot be retried — and one
+        // schedule failing must not swallow the others in the same sweep. Record the miss
+        // where it will be seen instead of losing it silently.
+        await this.store
+          .appendActivity(
+            this.makeActivity({
+              agentId: schedule.createdBy,
+              type: 'NOTE',
+              description:
+                `agendamento ${schedule.id} ("${schedule.title}") perdeu a ocorrencia: ` +
+                `${error instanceof Error ? error.message : String(error)}`,
+              pointer: schedule.pointer
+            }),
+            { history: false }
+          )
+          .catch(() => undefined);
+      }
     }
     return created;
   }

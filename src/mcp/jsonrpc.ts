@@ -64,14 +64,41 @@ export class StdioServer {
       return;
     }
 
-    // Valid JSON is not necessarily a request. `null`, a number, a string or an array
-    // carries no id to answer with, so it is refused here rather than read as a
-    // notification -- reading `.id` off `null` used to throw and poison the queue.
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    // A batch is a JSON-RPC array. Answering it with a single "must be an object" error
+    // is indistinguishable from every request in it failing, so it is refused explicitly:
+    // MCP dropped batching, and pretending to support it would be worse than saying so.
+    if (Array.isArray(parsed)) {
+      this.write({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: INVALID_REQUEST,
+          message: 'Batch requests are not supported. Send one request per line.'
+        }
+      });
+      return;
+    }
+
+    // Valid JSON is not necessarily a request. `null`, a number or a string carries no id
+    // to answer with, so it is refused here rather than read as a notification --
+    // reading `.id` off `null` used to throw and poison the queue.
+    if (typeof parsed !== 'object' || parsed === null) {
       this.write({
         jsonrpc: '2.0',
         id: null,
         error: { code: INVALID_REQUEST, message: 'Request must be a JSON object' }
+      });
+      return;
+    }
+
+    // A wrong protocol version is a mistake worth naming: silently accepting it would
+    // hide a client talking a different dialect until something subtler broke.
+    const version = (parsed as JsonRpcMessage).jsonrpc;
+    if (version !== undefined && version !== '2.0') {
+      this.write({
+        jsonrpc: '2.0',
+        id: (parsed as JsonRpcMessage).id ?? null,
+        error: { code: INVALID_REQUEST, message: `Unsupported jsonrpc version: ${String(version)}` }
       });
       return;
     }
