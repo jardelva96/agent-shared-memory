@@ -2,7 +2,7 @@ import { detectOverlapPairs, OverlapPair } from '../core/conflicts.js';
 import { formatPointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
-import { AgentStatus } from '../models/types.js';
+import { AgentStatus, AgentTask } from '../models/types.js';
 
 export interface SnapshotAgent {
   id: string;
@@ -29,6 +29,16 @@ export interface SnapshotEvent {
   timestamp: string;
 }
 
+export interface SnapshotTask {
+  id: string;
+  title: string;
+  status: string;
+  createdBy: string;
+  owner: string;
+  pointer: string;
+  depth: number;
+}
+
 export interface DashboardSnapshot {
   project: string;
   generatedAt: string;
@@ -36,13 +46,15 @@ export interface DashboardSnapshot {
   agents: SnapshotAgent[];
   overlaps: OverlapPair[];
   events: SnapshotEvent[];
+  tasks: SnapshotTask[];
 }
 
 export async function buildSnapshot(service: AgentMemoryService, eventLimit = 40): Promise<DashboardSnapshot> {
   const config = await service.config();
-  const [states, activities] = await Promise.all([
+  const [states, activities, queue] = await Promise.all([
     service.states(),
-    service.store.recentActivities(eventLimit)
+    service.store.recentActivities(eventLimit),
+    service.tasks.list({ status: ['OPEN', 'CLAIMED'] })
   ]);
 
   const overlaps = detectOverlapPairs(states, config);
@@ -80,6 +92,15 @@ export async function buildSnapshot(service: AgentMemoryService, eventLimit = 40
     staleAfterSeconds: config.staleAfterSeconds,
     agents,
     overlaps,
+    tasks: queue.map<SnapshotTask>((task: AgentTask) => ({
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      createdBy: task.createdBy,
+      owner: task.claimedBy ?? task.assignedTo ?? '',
+      pointer: formatPointer(task.pointer),
+      depth: task.depth
+    })),
     events: activities.map(activity => ({
       id: activity.id,
       agentId: activity.agentId,

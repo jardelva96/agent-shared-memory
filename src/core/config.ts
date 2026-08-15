@@ -8,7 +8,9 @@ export const DEFAULT_CONFIG: ProjectConfig = {
   staleAfterSeconds: 60,
   recentHistoryLimit: 20,
   projectName: 'Unnamed Project',
-  autoCompactAfterEvents: 5000
+  autoCompactAfterEvents: 5000,
+  taskClaimSeconds: 900,
+  maxTaskDepth: 3
 };
 
 export async function configExists(root = process.cwd()): Promise<boolean> {

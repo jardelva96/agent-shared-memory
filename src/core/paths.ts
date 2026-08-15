@@ -9,6 +9,8 @@ export interface MemoryPaths {
   eventsDir: string;
   eventsArchiveDir: string;
   inboxDir: string;
+  tasksDir: string;
+  schedulesDir: string;
   locksDir: string;
   sharedMemoryFile: string;
   configFile: string;
@@ -26,6 +28,8 @@ export function resolvePaths(root = process.cwd()): MemoryPaths {
     eventsDir: path.join(agentsDir, 'events'),
     eventsArchiveDir: path.join(agentsDir, 'events', 'archive'),
     inboxDir: path.join(agentsDir, 'inbox'),
+    tasksDir: path.join(agentsDir, 'tasks'),
+    schedulesDir: path.join(agentsDir, 'schedules'),
     locksDir: path.join(agentsDir, '.locks'),
     sharedMemoryFile: path.join(agentsDir, 'SHARED_MEMORY.md'),
     configFile: path.join(agentsDir, 'config.json'),

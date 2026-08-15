@@ -23,6 +23,10 @@ A proposta é simples: antes de uma alteração relevante, o agente anuncia **o 
 ├── inbox/
 │   ├── AGENT-02.jsonl     # mensagens endereçadas ao agente
 │   └── AGENT-02.cursor.json
+├── tasks/
+│   └── T-XXXX.json        # fila de trabalho durável
+├── schedules/
+│   └── S-XXXX.json        # agendamentos cron
 └── .locks/                # locks internos de escrita
 ```
 
@@ -263,6 +267,73 @@ O objetivo é **consciência compartilhada**, não locking autoritário.
 
 O aviso na CLI cobre quem está escrevendo naquele momento. Para ver todas as sobreposições ativas do projeto de uma vez, use o dashboard ou `GET /api/snapshot`.
 
+## Fila de trabalho, runner e agendamento
+
+Uma mensagem se perde se ninguém ler; uma **tarefa** fica na fila até alguém reivindicar e concluir. É a forma de delegar trabalho que **sobrevive à sessão** — inclusive entre ferramentas diferentes (Claude Code, Codex, Cursor) no mesmo repositório.
+
+```bash
+agent-memory task create --agent AGENT-01 --title "Documentar parseArgs" \
+  --detail "Explicar a nova ordem de flags" --pointer "README.md"
+agent-memory task create --agent AGENT-01 --title "Revisar auth" --for AGENT-02
+
+agent-memory task list [--status OPEN] [--json]
+agent-memory task claim --agent AGENT-02
+agent-memory task done --id T-XXXX --message "README atualizado"
+agent-memory task fail --id T-XXXX --message "faltou credencial"
+```
+
+Uma tarefa com `--for` só pode ser reivindicada pelo agente indicado, e chega também na caixa de entrada dele. Ao terminar, quem pediu recebe o resultado — inclusive quando falha.
+
+### Runner
+
+O runner reivindica tarefas e executa um comando por tarefa:
+
+```bash
+agent-memory run --agent AGENT-03 --exec "meu-script.sh" --once
+agent-memory run --agent AGENT-03 --exec "claude -p \"$AGENT_TASK_DETAIL\""   # loop contínuo
+```
+
+**O conteúdo da tarefa nunca entra na string do comando.** Título, detalhe e ponteiro chegam por variáveis de ambiente:
+
+```text
+AGENT_ID  AGENT_MEMORY_ROOT  AGENT_TASK_ID  AGENT_TASK_TITLE
+AGENT_TASK_DETAIL  AGENT_TASK_POINTER  AGENT_TASK_POINTER_FILE
+AGENT_TASK_DEPTH  AGENT_TASK_ATTEMPT
+```
+
+O motivo é direto: o título é escrito por outro agente. Interpolá-lo no comando deixaria texto enfileirado virar código. Apenas `{{task_id}}` e `{{task_depth}}` são substituídos no comando, porque têm charset validado e não podem carregar sintaxe de shell — o que também evita a armadilha de escrever `$AGENT_TASK_ID` num comando que roda sob `cmd.exe` no Windows.
+
+O comando roda com `cwd` na raiz do projeto, então use `--root .` ao chamar a própria CLI de dentro dele.
+
+Exit 0 conclui a tarefa; qualquer outro código a marca como `FAILED`, guardando a saída. Um comando travado é morto por `--timeout` (padrão: a duração do claim), **junto com toda a árvore de processos** — matar só o shell deixaria o comando real vivo como neto.
+
+### Agendamento
+
+```bash
+agent-memory schedule create --agent AGENT-01 --cron "0 9 * * 1-5" \
+  --title "Varredura diaria de dependencias"
+agent-memory schedule list
+agent-memory scheduler --interval 30       # daemon
+agent-memory scheduler --once              # uma passada, para Task Scheduler/cron do SO
+```
+
+Cron de 5 campos com `*`, `n`, `a-b`, `a,b,c` e passos. Quando ambos os campos de dia estão restritos, basta um casar — o comportamento padrão do cron. Vários schedulers podem rodar juntos: a varredura inteira é serializada e o `nextRunAt` é reavaliado dentro do lock, então um horário nunca dispara duas vezes.
+
+### Limites contra spawn descontrolado
+
+Um agente que cria tarefas pode criar um agente que cria tarefas. Toda tarefa criada **durante a execução de outra** herda profundidade + 1, e passar de `maxTaskDepth` (padrão 3) é recusado:
+
+```text
+T-...52278 | DONE   | depth 0 | auditoria de dependencias
+T-...IO9739 | DONE   | depth 1 | corrigir o que a auditoria achou
+T-...NF910 | DONE   | depth 2 | corrigir o que a auditoria achou
+T-...V8CFF9 | FAILED | depth 3 | Task depth limit reached (3)
+```
+
+O servidor MCP fecha esse ciclo sozinho: quando iniciado por um runner, ele lê `AGENT_TASK_ID` do próprio ambiente e usa como pai de qualquer tarefa criada. O modelo não precisa saber que existe profundidade.
+
+Um claim expira depois de `taskClaimSeconds` (padrão 900). Se o runner morrer no meio, a tarefa volta para a fila com o número de tentativas incrementado, em vez de ficar presa.
+
 ## Watcher de Git
 
 O restante do sistema confia no autorrelato do agente. O watcher lê o working tree e compara com o que foi declarado:
@@ -388,6 +459,10 @@ Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `
 | `memory_read` | `SHARED_MEMORY.md` completo. |
 | `memory_register` | Registra o agente. Se o id já existe, reanexa em vez de falhar — seguro em reconexões. |
 | `memory_record` | Um passo do ciclo, via `type`: `INTENT`, `READING`, `FOUND`, `CHANGED`, `CREATED`, `TESTING`, `WAITING`, `NOTE`, `DONE`. Retorna as sobreposições detectadas. |
+| `memory_task_create` | Enfileira trabalho durável para outro agente. |
+| `memory_task_list` | Lista a fila. |
+| `memory_task_claim` | Reivindica a tarefa mais antiga disponível. |
+| `memory_task_finish` | Fecha a tarefa com DONE, FAILED ou CANCELLED. |
 | `memory_send` | Envia mensagem para a caixa de outro agente. |
 | `memory_inbox` | Lê as mensagens do agente. Aceita `peek` e `all`. |
 | `memory_heartbeat` | Atualiza a presença em trechos longos sem registro. |
@@ -444,6 +519,10 @@ testing     Registra testes em andamento/concluídos
 waiting     Registra dependência/espera
 note        Registra observação operacional
 done        Finaliza a demanda/ação
+task        Enfileira, lista, reivindica e conclui trabalho
+schedule    Cria e lista agendamentos cron
+run         Runner: reivindica tarefas e executa um comando por tarefa
+scheduler   Materializa tarefas dos agendamentos vencidos
 config      Consulta/altera configuração
 compact     Arquiva journal e históricos antigos
 watch       Compara o working tree do Git com o que foi declarado

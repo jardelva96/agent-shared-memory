@@ -54,7 +54,10 @@ code{color:var(--link);font-size:12px;word-break:break-word}
 .who{font-weight:600;min-width:82px}
 .empty{color:var(--muted);padding:16px;font-size:13px}
 .unread{color:var(--info);font-size:12px;font-weight:600}
-.s-MESSAGE{background:rgba(88,166,255,.18);color:var(--info)}
+.s-MESSAGE,.s-TASK{background:rgba(88,166,255,.18);color:var(--info)}
+.s-OPEN{background:rgba(210,153,34,.18);color:var(--warn)}
+.s-CLAIMED{background:rgba(163,113,247,.18);color:var(--accent)}
+.s-FAILED,.s-CANCELLED{background:rgba(248,81,73,.16);color:var(--danger)}
 .s-OBSERVED{background:rgba(110,118,129,.2);color:var(--idle)}
 .s-REGISTERED,.s-UNREGISTERED{background:rgba(110,118,129,.2);color:var(--idle)}
 .s-INTENT{background:rgba(210,153,34,.18);color:var(--warn)}
@@ -91,6 +94,9 @@ code{color:var(--link);font-size:12px;word-break:break-word}
   </tr></thead>
   <tbody id="agents"><tr><td colspan="7" class="empty">Waiting for data...</td></tr></tbody>
 </table>
+
+<h2>Work queue</h2>
+<ul class="feed" id="queue"><li class="empty">Waiting for data...</li></ul>
 
 <h2>Recent activity</h2>
 <ul class="feed" id="feed"><li class="empty">Waiting for data...</li></ul>
@@ -213,6 +219,33 @@ code{color:var(--link);font-size:12px;word-break:break-word}
     });
   }
 
+  function renderQueue() {
+    var host = document.getElementById('queue');
+    host.textContent = '';
+    if (!snapshot) return;
+
+    var tasks = (snapshot.tasks || []).filter(function (t) {
+      return matches([t.id, t.title, t.createdBy, t.owner, t.pointer]);
+    });
+
+    if (tasks.length === 0) {
+      host.appendChild(el('li', 'empty', 'No open work.'));
+      return;
+    }
+
+    tasks.forEach(function (task) {
+      var item = el('li');
+      item.appendChild(el('span', 'when', task.id));
+      item.appendChild(el('span', 'tag s-' + task.status, task.status));
+      item.appendChild(el('span', null, task.title));
+      if (task.owner) item.appendChild(el('span', 'muted', task.owner));
+      item.appendChild(el('span', 'muted', 'by ' + task.createdBy));
+      if (task.depth > 0) item.appendChild(el('span', 'muted', 'depth ' + task.depth));
+      if (task.pointer && task.pointer !== '-') item.appendChild(el('code', null, task.pointer));
+      host.appendChild(item);
+    });
+  }
+
   function renderFeed() {
     var feed = document.getElementById('feed');
     feed.textContent = '';
@@ -247,6 +280,7 @@ code{color:var(--link);font-size:12px;word-break:break-word}
     document.title = snapshot.project + ' - Agent Shared Memory';
     renderBanner();
     renderAgents();
+    renderQueue();
     renderFeed();
   }
 

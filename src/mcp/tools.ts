@@ -3,7 +3,7 @@ import { detectConflicts } from '../core/conflicts.js';
 import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
-import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig } from '../models/types.js';
+import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
 import { INVALID_PARAMS, RpcError } from './jsonrpc.js';
 
 const RECORDABLE: ActivityType[] = [
@@ -162,6 +162,62 @@ export const TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'memory_task_create',
+    description:
+      'Queue work for another agent to pick up later. Unlike a message, a task persists until someone claims and finishes it, ' +
+      'so use it for work that must survive this session. Assign it with `for` when a specific agent must do it; leave it open otherwise.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id (who is asking).' },
+        title: { type: 'string', description: 'What needs doing, in one precise line.' },
+        detail: { type: 'string', description: 'Everything the executor needs to start without asking.' },
+        for: { type: 'string', description: 'Agent id that must do it. Omit to leave it open to anyone.' },
+        pointer: { type: 'string', description: 'Optional "file::symbol::parameter" the task is about.' }
+      },
+      required: ['agent', 'title']
+    }
+  },
+  {
+    name: 'memory_task_list',
+    description: 'List queued work. Call it when looking for something to pick up, or to check on work you delegated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          description: 'Comma-separated filter: OPEN, CLAIMED, DONE, FAILED, CANCELLED. Defaults to all.'
+        }
+      }
+    }
+  },
+  {
+    name: 'memory_task_claim',
+    description:
+      'Take the oldest task available to you and start working on it. The claim is exclusive, and expires if you stop ' +
+      'without finishing, so the work returns to the queue rather than being lost.',
+    inputSchema: {
+      type: 'object',
+      properties: { agent: { type: 'string', description: 'Your agent id.' } },
+      required: ['agent']
+    }
+  },
+  {
+    name: 'memory_task_finish',
+    description:
+      'Close a task you claimed. Report the outcome honestly: use FAILED with the reason when it did not work, ' +
+      'rather than DONE. Whoever queued it is told either way.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Task id, e.g. T-ABC123.' },
+        status: { type: 'string', enum: ['DONE', 'FAILED', 'CANCELLED'], description: 'How it ended.' },
+        result: { type: 'string', description: 'What happened, briefly.' }
+      },
+      required: ['id', 'status']
+    }
+  },
+  {
     name: 'memory_heartbeat',
     description:
       'Refresh this agent presence so it does not appear OFFLINE to the others. ' +
@@ -225,6 +281,51 @@ export async function callTool(
     }
     case 'memory_inbox':
       return inboxText(service, agentId(), args);
+    case 'memory_task_create': {
+      const task = await service.createTask({
+        title: requiredString(args, 'title'),
+        createdBy: agentId(),
+        detail: optionalString(args, 'detail'),
+        assignedTo: optionalString(args, 'for'),
+        pointer: parsePointer(optionalString(args, 'pointer')),
+        // Set when this server was launched by a runner: the queue then knows this task
+        // is one generation deeper, and the depth limit applies without the model
+        // having to be aware of it at all.
+        parentTaskId: process.env.AGENT_TASK_ID || undefined
+      });
+      return `Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''} at depth ${task.depth}.`;
+    }
+    case 'memory_task_list': {
+      const statusFilter = optionalString(args, 'status');
+      const tasks = await service.tasks.list({
+        status: statusFilter ? (statusFilter.toUpperCase().split(',') as TaskStatus[]) : undefined
+      });
+      if (tasks.length === 0) return 'No tasks.';
+      return tasks
+        .map(task => {
+          const who = task.assignedTo ? ` for ${task.assignedTo}` : task.claimedBy ? ` by ${task.claimedBy}` : '';
+          const where = task.pointer ? ` | ${formatPointer(task.pointer)}` : '';
+          return `${task.id} ${task.status} ${task.title}${who}${where}`;
+        })
+        .join('\n');
+    }
+    case 'memory_task_claim': {
+      const task = await service.claimTask(agentId());
+      if (!task) return 'No task available to claim.';
+      const lines = [`Claimed ${task.id}: ${task.title}`];
+      if (task.detail) lines.push(task.detail);
+      if (task.pointer) lines.push(`Pointer: ${formatPointer(task.pointer)}`);
+      lines.push(`Queued by ${task.createdBy}. Call memory_task_finish when done.`);
+      return lines.join('\n');
+    }
+    case 'memory_task_finish': {
+      const status = requiredString(args, 'status').toUpperCase() as TaskStatus;
+      if (!['DONE', 'FAILED', 'CANCELLED'].includes(status)) {
+        throw new RpcError(INVALID_PARAMS, `Invalid status: ${status}. Use DONE, FAILED or CANCELLED.`);
+      }
+      const task = await service.finishTask(requiredString(args, 'id'), status, optionalString(args, 'result'));
+      return `${task.id} is now ${task.status}.`;
+    }
     case 'memory_heartbeat': {
       const state = await service.heartbeat(agentId());
       return `Heartbeat recorded for ${state.id} at ${state.lastHeartbeatAt}.`;

@@ -1,8 +1,11 @@
-import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, CodePointer, Conflict, ProjectConfig } from '../models/types.js';
-import { createId, createSessionId } from '../utils/ids.js';
+import path from 'node:path';
+import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, AgentTask, CodePointer, Conflict, ProjectConfig, TaskSchedule, TaskStatus } from '../models/types.js';
+import { createId, createScheduleId, createSessionId, createTaskId } from '../utils/ids.js';
 import { nowIso } from '../utils/time.js';
 import { readConfig, writeConfig, DEFAULT_CONFIG } from './config.js';
-import { isLockTimeout } from '../utils/fs.js';
+import { isLockTimeout, withFileLock } from '../utils/fs.js';
+import { parseCron } from './cron.js';
+import { ScheduleStore, TaskStore } from './tasks.js';
 import { detectConflicts } from './conflicts.js';
 import { InboxStore } from './inbox.js';
 import { formatPointer, pointerKey } from './pointer.js';
@@ -53,13 +56,37 @@ export interface InboxResult {
   unread: AgentMessage[];
 }
 
+export interface CreateTaskInput {
+  title: string;
+  createdBy: string;
+  detail?: string;
+  pointer?: CodePointer;
+  assignedTo?: string;
+  /** Set when a runner creates a task while executing one, to bound spawn depth. */
+  parentTaskId?: string;
+  scheduleId?: string;
+}
+
+export interface CreateScheduleInput {
+  cron: string;
+  title: string;
+  createdBy: string;
+  detail?: string;
+  pointer?: CodePointer;
+  assignedTo?: string;
+}
+
 export class AgentMemoryService {
   readonly store: MemoryStore;
   readonly messages: InboxStore;
+  readonly tasks: TaskStore;
+  readonly schedules: ScheduleStore;
 
   constructor(public readonly root = process.cwd()) {
     this.store = new MemoryStore(root);
     this.messages = new InboxStore(root);
+    this.tasks = new TaskStore(root);
+    this.schedules = new ScheduleStore(root);
   }
 
   async init(projectName?: string, overrides: Partial<ProjectConfig> = {}): Promise<ProjectConfig> {
@@ -280,6 +307,176 @@ export class AgentMemoryService {
     });
   }
 
+  /**
+   * Queues work for whoever can take it. Depth is inherited from the task being executed,
+   * so a chain of agents spawning agents stops at maxTaskDepth instead of running away.
+   */
+  async createTask(input: CreateTaskInput): Promise<AgentTask> {
+    const config = await this.config();
+    let depth = 0;
+
+    if (input.parentTaskId) {
+      const parent = await this.tasks.read(input.parentTaskId);
+      depth = parent.depth + 1;
+      if (depth > config.maxTaskDepth) {
+        throw new Error(
+          `Task depth limit reached (${config.maxTaskDepth}): ${input.parentTaskId} is already ${parent.depth} deep. ` +
+            'Raise maxTaskDepth only if the chain is genuinely needed.'
+        );
+      }
+    }
+
+    if (input.assignedTo && !(await this.store.stateExists(input.assignedTo))) {
+      throw new Error(`Cannot assign to an unregistered agent: ${input.assignedTo}`);
+    }
+
+    const now = nowIso();
+    const task: AgentTask = {
+      id: createTaskId(),
+      title: input.title,
+      detail: input.detail,
+      pointer: input.pointer,
+      createdBy: input.createdBy,
+      assignedTo: input.assignedTo,
+      status: 'OPEN',
+      attempts: 0,
+      depth,
+      parentTaskId: input.parentTaskId,
+      scheduleId: input.scheduleId,
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.tasks.write(task);
+
+    await this.store.appendActivity(
+      this.makeActivity({
+        agentId: input.createdBy,
+        type: 'TASK',
+        description: `queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`,
+        pointer: input.pointer
+      }, now),
+      { history: await this.store.stateExists(input.createdBy) }
+    );
+
+    // An assigned task is also a message, so the agent sees it where it already looks.
+    if (input.assignedTo && input.assignedTo !== input.createdBy) {
+      await this.deliver({
+        from: input.createdBy,
+        to: input.assignedTo,
+        body: `Task ${task.id} assigned to you: ${task.title}`,
+        pointer: input.pointer,
+        kind: 'task'
+      });
+    }
+
+    await this.afterWrite(config);
+    return task;
+  }
+
+  async claimTask(agentId: string): Promise<AgentTask | undefined> {
+    await this.requireAgent(agentId);
+    const config = await this.config();
+    const task = await this.tasks.claim(agentId, config.taskClaimSeconds);
+    if (!task) return undefined;
+
+    await this.store.appendActivity(
+      this.makeActivity({
+        agentId,
+        type: 'TASK',
+        description: `claimed ${task.id}: ${task.title}`,
+        pointer: task.pointer
+      })
+    );
+    await this.afterWrite(config);
+    return task;
+  }
+
+  async finishTask(id: string, status: TaskStatus, result?: string): Promise<AgentTask> {
+    const task = await this.tasks.finish(id, status, result);
+    const actor = task.claimedBy ?? task.createdBy;
+    await this.store.appendActivity(
+      this.makeActivity({
+        agentId: actor,
+        type: 'TASK',
+        description: `${status.toLowerCase()} ${task.id}: ${task.title}${result ? ` — ${result}` : ''}`,
+        pointer: task.pointer
+      }),
+      { history: await this.store.stateExists(actor) }
+    );
+
+    // Whoever asked for the work should hear how it ended.
+    if (task.createdBy !== actor && (await this.store.stateExists(task.createdBy))) {
+      await this.deliver({
+        from: actor,
+        to: task.createdBy,
+        body: `Task ${task.id} ${status.toLowerCase()}: ${task.title}${result ? ` — ${result}` : ''}`,
+        pointer: task.pointer,
+        kind: 'task'
+      });
+    }
+
+    await this.afterWrite();
+    return task;
+  }
+
+  async createSchedule(input: CreateScheduleInput): Promise<TaskSchedule> {
+    parseCron(input.cron); // Reject a bad expression now, not at the first tick.
+    const now = nowIso();
+    const schedule: TaskSchedule = {
+      id: createScheduleId(),
+      cron: input.cron.trim(),
+      title: input.title,
+      detail: input.detail,
+      pointer: input.pointer,
+      assignedTo: input.assignedTo,
+      enabled: true,
+      createdBy: input.createdBy,
+      nextRunAt: ScheduleStore.computeNextRun(input.cron),
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.schedules.write(schedule);
+    return schedule;
+  }
+
+  /**
+   * Materialises every schedule whose time has come. Safe to run from several processes:
+   * the whole sweep is serialised, and nextRunAt is re-read inside the lock.
+   */
+  async runDueSchedules(now: Date = new Date()): Promise<AgentTask[]> {
+    const created: AgentTask[] = [];
+    const lock = path.join(this.store.paths.locksDir, 'schedules.lock');
+
+    const due = await withFileLock(lock, async () => {
+      const ready: TaskSchedule[] = [];
+      for (const schedule of await this.schedules.list()) {
+        if (!schedule.enabled || !schedule.nextRunAt) continue;
+        if (new Date(schedule.nextRunAt) > now) continue;
+        ready.push(schedule);
+        // Advance before releasing the lock so no other scheduler fires the same slot.
+        schedule.lastRunAt = now.toISOString();
+        schedule.nextRunAt = ScheduleStore.computeNextRun(schedule.cron, now);
+        schedule.updatedAt = nowIso();
+        await this.schedules.write(schedule);
+      }
+      return ready;
+    });
+
+    for (const schedule of due) {
+      created.push(
+        await this.createTask({
+          title: schedule.title,
+          detail: schedule.detail,
+          pointer: schedule.pointer,
+          assignedTo: schedule.assignedTo,
+          createdBy: schedule.createdBy,
+          scheduleId: schedule.id
+        })
+      );
+    }
+    return created;
+  }
+
   /** Sends a message to another agent inbox. The recipient must be registered. */
   async sendMessage(input: SendMessageInput): Promise<AgentMessage> {
     const message = await this.deliver(input);
@@ -432,6 +629,7 @@ function statusFor(type: ActivityType, previous: AgentStatus): AgentStatus {
     case 'NOTE':
     case 'OBSERVED':
     case 'MESSAGE':
+    case 'TASK':
       return previous;
   }
 }

@@ -3,12 +3,13 @@ import path from 'node:path';
 import { AgentMemoryService } from '../core/service.js';
 import { parsePointer, formatPointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
-import { ActivityType } from '../models/types.js';
+import { ActivityType, AgentTask, TaskStatus } from '../models/types.js';
 import { parseArgs, stringFlag, numberFlag, boolFlag } from './args.js';
 import { startDashboard } from '../web/server.js';
 import { startMcpServer } from '../mcp/server.js';
 import { describeChange } from '../git/repo.js';
 import { assertGitRepo, baselineOf, ObservedChange, runWatchPass } from '../git/watcher.js';
+import { runQueue } from '../core/runner.js';
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -201,6 +202,158 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'task': {
+      const sub = parsed.positionals[0] ?? 'list';
+      if (sub === 'create') {
+        const task = await service.createTask({
+          title: required(stringFlag(parsed.flags, 'title'), '--title'),
+          createdBy: required(stringFlag(parsed.flags, 'agent'), '--agent'),
+          detail: stringFlag(parsed.flags, 'detail'),
+          assignedTo: stringFlag(parsed.flags, 'for'),
+          pointer: parsePointer(stringFlag(parsed.flags, 'pointer')),
+          parentTaskId: stringFlag(parsed.flags, 'parent')
+        });
+        console.log(`Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`);
+        break;
+      }
+      if (sub === 'claim') {
+        const task = await service.claimTask(required(stringFlag(parsed.flags, 'agent'), '--agent'));
+        if (!task) {
+          console.log('No task available.');
+          break;
+        }
+        console.log(parsed.flags.json ? JSON.stringify(task, null, 2) : formatTask(task, true));
+        break;
+      }
+      if (sub === 'done' || sub === 'fail' || sub === 'cancel') {
+        const status = sub === 'done' ? 'DONE' : sub === 'fail' ? 'FAILED' : 'CANCELLED';
+        const task = await service.finishTask(
+          required(stringFlag(parsed.flags, 'id') ?? parsed.positionals[1], '--id'),
+          status,
+          stringFlag(parsed.flags, 'message')
+        );
+        console.log(`${task.id} is now ${task.status}`);
+        break;
+      }
+      if (sub === 'list') {
+        const statusFlag = stringFlag(parsed.flags, 'status');
+        const tasks = await service.tasks.list({
+          status: statusFlag ? (statusFlag.toUpperCase().split(',') as TaskStatus[]) : undefined,
+          agent: stringFlag(parsed.flags, 'agent')
+        });
+        if (parsed.flags.json) {
+          console.log(JSON.stringify(tasks, null, 2));
+          break;
+        }
+        if (tasks.length === 0) {
+          console.log('No tasks.');
+          break;
+        }
+        for (const task of tasks) console.log(formatTask(task));
+        break;
+      }
+      throw new Error(`Unknown task subcommand: ${sub}. Use create, list, claim, done, fail or cancel.`);
+    }
+
+    case 'schedule': {
+      const sub = parsed.positionals[0] ?? 'list';
+      if (sub === 'create') {
+        const schedule = await service.createSchedule({
+          cron: required(stringFlag(parsed.flags, 'cron'), '--cron'),
+          title: required(stringFlag(parsed.flags, 'title'), '--title'),
+          createdBy: required(stringFlag(parsed.flags, 'agent'), '--agent'),
+          detail: stringFlag(parsed.flags, 'detail'),
+          assignedTo: stringFlag(parsed.flags, 'for'),
+          pointer: parsePointer(stringFlag(parsed.flags, 'pointer'))
+        });
+        console.log(`Created ${schedule.id}: "${schedule.cron}" -> ${schedule.title}`);
+        console.log(`Next run: ${schedule.nextRunAt ?? 'never'}`);
+        break;
+      }
+      if (sub === 'remove') {
+        const id = required(stringFlag(parsed.flags, 'id') ?? parsed.positionals[1], '--id');
+        await service.schedules.remove(id);
+        console.log(`Removed ${id}`);
+        break;
+      }
+      if (sub === 'list') {
+        const schedules = await service.schedules.list();
+        if (parsed.flags.json) {
+          console.log(JSON.stringify(schedules, null, 2));
+          break;
+        }
+        if (schedules.length === 0) {
+          console.log('No schedules.');
+          break;
+        }
+        for (const s of schedules) {
+          console.log(`${s.id} ${s.enabled ? 'ON ' : 'OFF'} "${s.cron}" ${s.title}`);
+          console.log(`  next: ${s.nextRunAt ?? '-'}  last: ${s.lastRunAt ?? 'never'}`);
+        }
+        break;
+      }
+      throw new Error(`Unknown schedule subcommand: ${sub}. Use create, list or remove.`);
+    }
+
+    case 'run': {
+      const agentId = required(stringFlag(parsed.flags, 'agent'), '--agent');
+      const exec = required(stringFlag(parsed.flags, 'exec'), '--exec');
+      const config = await service.config();
+      const timeout = numberFlag(parsed.flags, 'timeout') ?? config.taskClaimSeconds;
+      const once = boolFlag(parsed.flags, 'once');
+      const options = {
+        agentId,
+        exec,
+        intervalMs: (numberFlag(parsed.flags, 'interval') ?? 3) * 1000,
+        timeoutMs: timeout * 1000,
+        ...(once ? {} : { maxTasks: numberFlag(parsed.flags, 'max-tasks') ?? 0 }),
+        onEvent: (line: string) => console.log(line)
+      };
+
+      if (once) {
+        const outcomes = await runQueue(service, options);
+        console.log(`${outcomes.length} task(s) executed.`);
+        break;
+      }
+
+      console.log(`Runner ${agentId} waiting for tasks. Ctrl+C to stop.`);
+      let stopping = false;
+      process.on('SIGINT', () => {
+        stopping = true;
+        console.log('\nFinishing the current task, then stopping.');
+      });
+      await runQueue(service, options, () => stopping);
+      break;
+    }
+
+    case 'scheduler': {
+      const intervalMs = Math.max(5, numberFlag(parsed.flags, 'interval') ?? 30) * 1000;
+      if (boolFlag(parsed.flags, 'once')) {
+        const created = await service.runDueSchedules();
+        console.log(`${created.length} task(s) materialised.`);
+        for (const task of created) console.log(`  ${task.id}: ${task.title}`);
+        break;
+      }
+      console.log(`Scheduler checking every ${intervalMs / 1000}s. Ctrl+C to stop.`);
+      const tick = async () => {
+        try {
+          for (const task of await service.runDueSchedules()) {
+            console.log(`${new Date().toISOString()} queued ${task.id}: ${task.title}`);
+          }
+        } catch (error) {
+          console.error(`scheduler: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      };
+      await tick();
+      const timer = setInterval(() => void tick(), intervalMs);
+      process.on('SIGINT', () => {
+        clearInterval(timer);
+        console.log('\nScheduler stopped.');
+        process.exit(0);
+      });
+      break;
+    }
+
     case 'watch': {
       await assertGitRepo(root);
       const watcherId = stringFlag(parsed.flags, 'id');
@@ -287,6 +440,17 @@ async function main(): Promise<void> {
   }
 }
 
+function formatTask(task: AgentTask, verbose = false): string {
+  const who = task.assignedTo ? ` for ${task.assignedTo}` : task.claimedBy ? ` by ${task.claimedBy}` : '';
+  const head = `${task.id} ${task.status.padEnd(9)} ${task.title}${who}`;
+  if (!verbose) return head;
+  const lines = [head];
+  if (task.detail) lines.push(`  ${task.detail}`);
+  if (task.pointer) lines.push(`  ${formatPointer(task.pointer)}`);
+  lines.push(`  depth ${task.depth}, attempt ${task.attempts}`);
+  return lines.join('\n');
+}
+
 function formatObservation(entry: ObservedChange): string {
   const owner =
     entry.attribution === 'declared'
@@ -324,7 +488,7 @@ function truncate(value: string, width: number): string {
 }
 
 function printHelp(): void {
-  console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000]\n  compact [--keep 500] [--history] [--dry-run]\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
+  console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000]\n  compact [--keep 500] [--history] [--dry-run]\n\nWork queue:\n  task create --agent A --title "..." [--detail "..."] [--for B] [--pointer "..."]\n  task list [--status OPEN] [--agent A] [--json]\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
 }
 
 main().catch(error => {

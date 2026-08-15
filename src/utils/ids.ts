@@ -28,3 +28,18 @@ export function assertAgentId(value: string): string {
   }
   return id;
 }
+
+/** Short, sortable, readable ids for queue objects. */
+function shortId(prefix: string): string {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const rand = randomUUID().replaceAll('-', '').slice(0, 4).toUpperCase();
+  return `${prefix}-${stamp}${rand}`;
+}
+
+export function createTaskId(): string {
+  return shortId('T');
+}
+
+export function createScheduleId(): string {
+  return shortId('S');
+}
