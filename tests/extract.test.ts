@@ -126,3 +126,18 @@ test('it holds up on this repository, which is what it exists for', async () => 
   assert.match(shape.text, /maxTaskAttempts/);
   assert.ok(shape.text.split('\n').length < types.split('\n').length / 2, 'much smaller than the file');
 });
+
+test('a body that opens and closes on one line stops there', () => {
+  // Found by installing the package and calling it: the line ends in "}" rather than ";",
+  // so the statement scan ran past it and took the next declaration with it.
+  const source = ['export function alvo() { return 1; }', 'const outro = 2;', 'function depois() {}'].join('\n');
+  const found = extractSymbol(source, 'alvo')!;
+  assert.equal(found.text, 'export function alvo() { return 1; }');
+  assert.equal(found.startLine, 1);
+  assert.equal(found.endLine, 1);
+});
+
+test('a brace inside a string on the declaration line is not a body', () => {
+  const source = ['const sep = "{";', 'const depois = 1;'].join('\n');
+  assert.equal(extractSymbol(source, 'sep')!.text, 'const sep = "{";');
+});

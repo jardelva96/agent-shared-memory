@@ -127,6 +127,14 @@ function commentStart(lines: string[], declaration: number): number {
   return start;
 }
 
+/** Drops strings and comments, so a `{` inside either is not read as an opening brace. */
+function stripInline(line: string): string {
+  return line
+    .replace(/\/\*.*?\*\//g, '')
+    .replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '""')
+    .replace(/\/\/.*$/, '');
+}
+
 const MAX_LINES = 400;
 
 /**
@@ -159,7 +167,12 @@ export function extractSymbol(source: string, symbol: string): ExtractedSymbol |
   let depth = countBraces(declaration, state);
   let endLine = best;
 
-  if (depth > 0) {
+  if (depth <= 0 && /\{/.test(stripInline(declaration))) {
+    // The body opened and closed on this line: `function f() { return 1; }`. Falling
+    // through to the statement scan below would run past it, because the line ends in `}`
+    // rather than `;`, and swallow whatever came next.
+    endLine = best;
+  } else if (depth > 0) {
     // Brace-balanced: walk until the block that opened here closes.
     for (let i = best + 1; i < lines.length && i - best < MAX_LINES; i++) {
       depth += countBraces(lines[i], state);
