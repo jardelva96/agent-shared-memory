@@ -56,6 +56,15 @@ export interface InboxResult {
   unread: AgentMessage[];
 }
 
+export interface FinishOptions {
+  /**
+   * Set by the runner: this verdict comes from the process exit code, not from the agent
+   * calling memory_task_finish. Only meaningful when the agent recorded nothing itself,
+   * since a verdict already given is never overwritten.
+   */
+  fromExitCode?: boolean;
+}
+
 export interface CreateTaskInput {
   title: string;
   createdBy: string;
@@ -441,11 +450,24 @@ export class AgentMemoryService {
    * being self-declared. A review whose work failed has nothing left to judge, so it is
    * cancelled rather than left blocking the queue forever.
    */
-  async finishTask(id: string, status: TaskStatus, result?: string, by?: string): Promise<AgentTask> {
+  async finishTask(
+    id: string,
+    status: TaskStatus,
+    result?: string,
+    by?: string,
+    options: FinishOptions = {}
+  ): Promise<AgentTask> {
     const task = await this.tasks.finish(id, status, result, by);
 
     if (task.reviewOf) {
-      await this.settleReview(task, status, result);
+      // A reviewer that died never judged anything. Because tasks.finish ignores a verdict
+      // already recorded by the agent, a status arriving here from an exit code proves the
+      // agent closed nothing itself -- so this is "could not review", not "rejected".
+      if (status !== 'DONE' && options.fromExitCode) {
+        await this.retryAbandonedReview(task, result);
+      } else {
+        await this.settleReview(task, status, result);
+      }
     } else if (status !== 'DONE' && task.reviewTaskId) {
       // The work did not land, so its review has nothing to judge.
       await this.tasks
@@ -477,6 +499,48 @@ export class AgentMemoryService {
 
     await this.afterWrite();
     return task;
+  }
+
+  /**
+   * Puts a review back in the queue when its agent died before judging.
+   *
+   * Counting a crash as a rejection is expensive twice over: correct work is bounced back
+   * to a doer who has nothing to fix, and a round is burned off the rejection limit. A
+   * session limit, a dropped connection or an OOM says nothing about the code.
+   */
+  private async retryAbandonedReview(review: AgentTask, result?: string): Promise<void> {
+    const { maxTaskAttempts } = await this.config();
+    const now = nowIso();
+
+    // A reviewer that dies every time it runs would otherwise requeue forever. The same
+    // attempt budget that dead-letters a poisonous task applies here.
+    if (maxTaskAttempts > 0 && review.attempts >= maxTaskAttempts) {
+      review.result =
+        `revisao abandonada apos ${review.attempts} tentativa(s): o agente terminou sem dar veredito. ` +
+        `Ultima saida: ${result ?? 'sem detalhe'}. O trabalho continua sem revisao — precisa de decisao humana.`;
+      review.updatedAt = now;
+      await this.tasks.write(review);
+      return;
+    }
+
+    review.status = 'OPEN';
+    review.claimedBy = undefined;
+    review.claimedAt = undefined;
+    review.claimExpiresAt = undefined;
+    review.finishedAt = undefined;
+    review.result = undefined;
+    review.updatedAt = now;
+    await this.tasks.write(review);
+
+    await this.store.appendActivity(
+      this.makeActivity({
+        agentId: review.claimedBy ?? review.createdBy,
+        type: 'TASK',
+        description: `revisao ${review.id} nao chegou a julgar (${result ?? 'sem detalhe'}); devolvida para a fila`,
+        pointer: review.pointer
+      }),
+      { history: false }
+    );
   }
 
   /** Applies a review verdict to the work it judged. */

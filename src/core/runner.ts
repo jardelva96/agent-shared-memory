@@ -135,7 +135,9 @@ export async function runQueue(
     outcomes.push(outcome);
 
     try {
-      await service.finishTask(task.id, outcome.status, summarise(outcome), options.agentId);
+      await service.finishTask(task.id, outcome.status, summarise(outcome), options.agentId, {
+        fromExitCode: true
+      });
       log(`${outcome.status.toLowerCase()} ${task.id} (exit ${outcome.exitCode ?? 'n/a'})`);
     } catch (error) {
       log(`${task.id} ran but could not be closed: ${error instanceof Error ? error.message : String(error)}`);

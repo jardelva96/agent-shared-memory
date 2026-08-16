@@ -3,15 +3,32 @@
   "version": "1.1.0",
   "description": "Shared real-time operational memory for multiple coding agents working in the same repository: CLI, MCP server, git watcher, inter-agent messaging and a live dashboard.",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "agent-memory": "dist/cli/main.js"
   },
+  "files": [
+    "dist",
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli/main.ts",
     "test": "node --test --import tsx tests/*.test.ts",
     "start": "node dist/cli/main.js",
-    "example": "tsx examples/demo.ts"
+    "example": "tsx examples/demo.ts",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "ai-agents",

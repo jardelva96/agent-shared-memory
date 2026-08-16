@@ -276,3 +276,79 @@ test('endless rejection stops at the limit instead of billing forever', async ()
     assert.equal(await service.claimTask('DEV'), undefined, 'and nobody picks it up again');
   });
 });
+
+test('a reviewer that dies without judging is not read as a rejection', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'implementar cache',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'QA'
+    });
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+    const review = (await service.claimTask('QA'))!;
+
+    // The runner closes it from a non-zero exit: session limit, OOM, dropped connection.
+    // The agent recorded no verdict, so this says nothing about the code.
+    await service.finishTask(review.id, 'FAILED', 'exit 1: session limit', 'QA', { fromExitCode: true });
+
+    const settledWork = await service.tasks.read(work.id);
+    assert.equal(settledWork.status, 'DONE', 'correct work is not bounced back to the doer');
+    assert.equal(settledWork.reviewRounds ?? 0, 0, 'and no rejection round is burned');
+    assert.equal(await service.claimTask('DEV'), undefined, 'the doer has nothing to redo');
+
+    const retry = await service.claimTask('QA');
+    assert.equal(retry?.id, review.id, 'the review itself goes back to the queue');
+  });
+});
+
+test('a reviewer that keeps dying eventually stops instead of requeueing forever', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'implementar cache',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'QA'
+    });
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    // maxTaskAttempts defaults to 3; the third crash is the one that gives up.
+    let review = (await service.claimTask('QA'))!;
+    for (let crash = 1; crash <= 3; crash++) {
+      await service.finishTask(review.id, 'FAILED', `exit 1: crash ${crash}`, 'QA', { fromExitCode: true });
+      if (crash < 3) review = (await service.claimTask('QA'))!;
+    }
+
+    assert.equal(await service.claimTask('QA'), undefined, 'it stops asking');
+    const dead = await service.tasks.read(review.id);
+    assert.equal(dead.status, 'FAILED');
+    assert.match(dead.result!, /sem dar veredito/);
+    assert.match(dead.result!, /decisao humana/);
+  });
+});
+
+test('a real rejection still rejects, exit code or not', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'implementar cache',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'QA'
+    });
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+    const review = (await service.claimTask('QA'))!;
+
+    // The agent judged through the tools; the runner's later call is already a no-op.
+    await service.finishTask(review.id, 'FAILED', 'o cache nunca expira', 'QA');
+    await service.finishTask(review.id, 'FAILED', 'exit 1', 'QA', { fromExitCode: true });
+
+    const bounced = await service.tasks.read(work.id);
+    assert.equal(bounced.status, 'OPEN', 'the verdict still sends the work back');
+    assert.equal(bounced.reviewRounds, 1);
+    assert.match(bounced.detail!, /nunca expira/);
+  });
+});
