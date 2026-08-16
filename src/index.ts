@@ -27,6 +27,8 @@ export type { TaskFilter } from './core/tasks.js';
 
 export { formatPointer, parsePointer, pointerKey, pointersOverlap } from './core/pointer.js';
 export { detectConflicts, detectOverlapPairs } from './core/conflicts.js';
+export { extractSymbol } from './core/extract.js';
+export type { ExtractedSymbol } from './core/extract.js';
 export type { OverlapPair } from './core/conflicts.js';
 
 export { DEFAULT_CONFIG, configExists, readConfig, writeConfig } from './core/config.js';

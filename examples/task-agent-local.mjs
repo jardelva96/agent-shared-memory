@@ -55,8 +55,24 @@ const tools = [
   {
     type: 'function',
     function: {
+      name: 'read_pointer',
+      description:
+        'Read only the code a pointer names: "file::symbol". Returns that symbol alone, not the whole file. ' +
+        'Always try this before read_file — a small model that reads a whole file usually runs out of turns.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pointer: { type: 'string', description: 'Like "src/core/config.ts::DEFAULT_CONFIG".' }
+        },
+        required: ['pointer']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'read_file',
-      description: 'Read a file from the project. Use the pointer you were given before searching.',
+      description: 'Read a whole file. Prefer read_pointer when you know the symbol.',
       parameters: {
         type: 'object',
         properties: { file: { type: 'string', description: 'Project-relative path.' } },
@@ -128,11 +144,30 @@ const { AgentMemoryService } = await import(
   new URL('../dist/core/service.js', import.meta.url).href
 ).catch(() => ({ AgentMemoryService: null }));
 
+// Narrowing a file to one symbol is the whole reason a small model can answer at all here,
+// so if the build is missing, read_pointer degrades to reading the file rather than failing.
+const { extractSymbol } = await import(new URL('../dist/core/extract.js', import.meta.url).href).catch(
+  () => ({ extractSymbol: () => undefined })
+);
+const { parsePointer } = await import(new URL('../dist/core/pointer.js', import.meta.url).href).catch(
+  () => ({ parsePointer: value => ({ file: String(value).split('::')[0], symbol: String(value).split('::')[1] }) })
+);
+
 const service = AgentMemoryService ? new AgentMemoryService(root) : null;
 let finalAnswer = null;
 
 async function runTool(name, args) {
   switch (name) {
+    case 'read_pointer': {
+      const parsed = parsePointer(String(args.pointer ?? ''));
+      if (!parsed?.file) return 'Not a pointer. Use "file::symbol".';
+      const text = await readFile(resolveInside(parsed.file), 'utf8');
+      if (!parsed.symbol) return text.length > 6000 ? `${text.slice(0, 6000)}\n...[truncado]` : text;
+      const found = extractSymbol(text, parsed.symbol);
+      // Truncation is what a whole-file read does to the answer; narrowing avoids needing it.
+      if (!found) return `Symbol "${parsed.symbol}" not found in ${parsed.file}. Try read_file.`;
+      return `${parsed.file}:${found.startLine}-${found.endLine}\n\n${found.text}`;
+    }
     case 'read_file': {
       const file = resolveInside(args.file);
       const text = await readFile(file, 'utf8');

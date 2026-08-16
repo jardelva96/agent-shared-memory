@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { AgentMemoryService } from '../src/core/service.js';
@@ -258,5 +258,55 @@ test('a task cannot be queued behind an id that does not exist', async () => {
     const bad = await call('memory_task_create', { agent: 'LEAD', title: 'juntar', after: 'T-INVENTADO' });
     assert.equal(bad.isError, true, 'a typo here would block the task forever, silently');
     assert.match(bad.content[0].text, /does not exist/);
+  });
+});
+
+test('a pointer reads the symbol, not the file around it', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    await writeFile(
+      path.join(service.root, 'app.ts'),
+      [
+        'const antes = 1;',
+        '',
+        '/** O que a funcao faz. */',
+        'export function alvo(x: number): number {',
+        '  return x * 2;',
+        '}',
+        '',
+        'const depois = 2;'
+      ].join('\n')
+    );
+
+    const narrowed = (await call('memory_read_pointer', { pointer: 'app.ts::alvo' })).content[0].text;
+    assert.match(narrowed, /O que a funcao faz/, 'the doc comment explains the symbol');
+    assert.match(narrowed, /return x \* 2;/);
+    assert.doesNotMatch(narrowed, /const depois/, 'the rest of the file stays out');
+    assert.match(narrowed, /app\.ts:3-6/, 'and it says where the slice came from');
+
+    const whole = (await call('memory_read_pointer', { pointer: 'app.ts' })).content[0].text;
+    assert.match(whole, /const depois/, 'a file-only pointer still returns the file');
+  });
+});
+
+test('a pointer cannot read outside the project', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    // The pointer comes from a model, and a model told the wrong thing asks for anything.
+    for (const escape of ['../../../etc/passwd', '../outside.txt']) {
+      const denied = await call('memory_read_pointer', { pointer: escape });
+      assert.equal(denied.isError, true, `${escape} must be refused`);
+      assert.match(denied.content[0].text, /Outside the project/);
+    }
+  });
+});
+
+test('a symbol that is not there says so instead of guessing', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    await writeFile(path.join(service.root, 'app.ts'), 'export function alvo() {}\n');
+    const missing = (await call('memory_read_pointer', { pointer: 'app.ts::naoExiste' })).content[0].text;
+    assert.match(missing, /not found/, 'a wrong slice would be worse than no slice');
+    assert.match(missing, /Read the file/);
   });
 });

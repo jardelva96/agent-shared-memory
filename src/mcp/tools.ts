@@ -1,4 +1,7 @@
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { configExists } from '../core/config.js';
+import { extractSymbol } from '../core/extract.js';
 import { detectConflicts } from '../core/conflicts.js';
 import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
@@ -83,6 +86,24 @@ export const TOOLS: ToolDefinition[] = [
       'Return the full generated SHARED_MEMORY.md, including every agent block and the recent-activity feed. ' +
       'Use when memory_status is not enough context and you need the whole picture.',
     inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'memory_read_pointer',
+    description:
+      'Read just the code a pointer names, instead of the whole file. Give it "file::symbol" and it returns ' +
+      'that symbol with its doc comment and line numbers. Prefer this over opening the file: it is the ' +
+      'difference between a few dozen lines and a few hundred. Falls back to reporting that the symbol was ' +
+      'not found, in which case read the file normally.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pointer: {
+          type: 'string',
+          description: 'A "file::symbol" pointer, e.g. "src/core/config.ts::DEFAULT_CONFIG". A file alone returns the file.'
+        }
+      },
+      required: ['pointer']
+    }
   },
   {
     name: 'memory_register',
@@ -287,6 +308,8 @@ export async function callTool(
       return statusText(service, optionalString(args, 'pointer'), pinnedAgent ?? optionalString(args, 'agent'));
     case 'memory_read':
       return service.store.readSharedMemory();
+    case 'memory_read_pointer':
+      return readPointerText(service, requiredString(args, 'pointer'));
     case 'memory_register':
       return registerText(service, agentId(), optionalString(args, 'role'), optionalString(args, 'task'));
     case 'memory_record':
@@ -494,6 +517,56 @@ function agentBlock(state: AgentState, config: ProjectConfig, unread = 0): strin
   if (unread > 0) lines.push(`  Unread messages: ${unread}`);
   lines.push(`  Updated: ${state.updatedAt}`);
   return lines;
+}
+
+const MAX_POINTER_READ_BYTES = 200_000;
+
+/**
+ * Returns the source a pointer names, narrowed to the symbol when there is one.
+ *
+ * Reads are confined to the project root. A pointer arrives from a model, and a model that
+ * has been told the wrong thing will happily ask for `../../.ssh/id_rsa`; resolving under
+ * the root and comparing the result is what keeps that from being a file read.
+ */
+async function readPointerText(service: AgentMemoryService, raw: string): Promise<string> {
+  const pointer = parsePointer(raw);
+  if (!pointer?.file) {
+    throw new Error(`Not a pointer: ${JSON.stringify(raw)}. Use "file::symbol".`);
+  }
+
+  const root = path.resolve(service.root);
+  const target = path.resolve(root, pointer.file);
+  const relative = path.relative(root, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Outside the project: ${pointer.file}`);
+  }
+
+  let source: string;
+  try {
+    const info = await stat(target);
+    if (!info.isFile()) throw new Error('not a file');
+    if (info.size > MAX_POINTER_READ_BYTES) {
+      // Without the symbol there is nothing to narrow to, and handing back a megabyte
+      // defeats the point of the tool.
+      if (!pointer.symbol) {
+        throw new Error(`${pointer.file} is ${Math.round(info.size / 1024)}kB. Point at a symbol to read part of it.`);
+      }
+    }
+    source = await readFile(target, 'utf8');
+  } catch (error) {
+    throw new Error(`Cannot read ${pointer.file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!pointer.symbol) return `${pointer.file} (whole file)\n\n${source}`;
+
+  const found = extractSymbol(source, pointer.symbol);
+  if (!found) {
+    return (
+      `Symbol ${JSON.stringify(pointer.symbol)} was not found in ${pointer.file}. ` +
+      'Read the file to check the spelling.'
+    );
+  }
+  return `${pointer.file}:${found.startLine}-${found.endLine} (${pointer.symbol})\n\n${found.text}`;
 }
 
 async function inboxText(
