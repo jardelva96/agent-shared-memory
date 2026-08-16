@@ -107,11 +107,13 @@ export class TaskStore {
       // This is what lets a plan run before the work, and a review run after it, without
       // anyone sequencing the waves by hand.
       const done = new Set(tasks.filter(task => task.status === 'DONE').map(task => task.id));
+      const byId = new Map(tasks.map(task => [task.id, task]));
       const candidate = tasks.find(
         task =>
           task.status === 'OPEN' &&
           (!task.assignedTo || task.assignedTo === agentId) &&
-          dependenciesOf(task).every(id => done.has(id))
+          dependenciesOf(task).every(id => done.has(id)) &&
+          !reviewsOwnWork(task, agentId, byId)
       );
       if (!candidate) return undefined;
 
@@ -230,6 +232,22 @@ export class ScheduleStore {
   static computeNextRun(cron: string, after: Date = new Date()): string | undefined {
     return nextOccurrence(parseCron(cron), after)?.toISOString();
   }
+}
+
+/**
+ * Whether this task would have an agent judge its own work.
+ *
+ * Matters most once reviews are left open to whoever is free: the agent that just finished
+ * the work is usually the first one idle, so without this it is the *likeliest* reviewer.
+ * "Done" would go back to being self-declared, with a review task to make it look otherwise.
+ *
+ * A review explicitly assigned to the agent that did the work is skipped too, and stays
+ * OPEN where someone can see it. A review that never happens is a visible problem; a review
+ * an agent gives itself is an invisible one.
+ */
+function reviewsOwnWork(task: AgentTask, agentId: string, byId: Map<string, AgentTask>): boolean {
+  if (!task.reviewOf) return false;
+  return byId.get(task.reviewOf)?.claimedBy === agentId;
 }
 
 /** Normalises the single-value form tasks written before dependsOn took a list. */

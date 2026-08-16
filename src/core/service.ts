@@ -78,6 +78,12 @@ export interface CreateTaskInput {
   dependsOn?: string | string[];
   /** Queue a linked review task for this agent, unblocked when the work lands. */
   reviewBy?: string;
+  /**
+   * Queue the review without naming a reviewer: whoever is free takes it, except the agent
+   * that did the work. Removes the single point of failure of a named reviewer that is busy
+   * or dead, at the cost of not choosing who judges.
+   */
+  reviewOpen?: boolean;
   /** Marks this task as the review of another. */
   reviewOf?: string;
 }
@@ -379,7 +385,7 @@ export class AgentMemoryService {
     };
     await this.tasks.write(task);
 
-    if (input.reviewBy) {
+    if (input.reviewBy || input.reviewOpen) {
       // Created here rather than by the executor: the reviewer must exist from the start,
       // so work cannot quietly close without anyone having looked at it.
       const review = await this.createTask({
@@ -389,6 +395,8 @@ export class AgentMemoryService {
           'houver para rodar). Conclua a revisao como DONE se estiver correto, ou FAILED com o ' +
           'motivo, o que devolve o trabalho para a fila.',
         createdBy: input.createdBy,
+        // Left unassigned on purpose when the review is open: the queue hands it to whoever
+        // is free, and claim() keeps it away from the agent that did the work.
         assignedTo: input.reviewBy,
         pointer: input.pointer,
         dependsOn: task.id,
@@ -626,7 +634,9 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
         `Objecao anterior: ${result ?? 'sem motivo'}. Verifique de fato (leia o codigo, rode o que ` +
         'houver para rodar). Conclua como DONE se estiver correto, ou FAILED com o motivo.',
       createdBy: review.createdBy,
-      assignedTo: review.assignedTo ?? review.claimedBy,
+      // An open review stays open for the next round. Falling back to whoever happened to
+      // claim it would quietly pin every later round to the first agent that showed up.
+      assignedTo: review.assignedTo,
       pointer: work.pointer,
       dependsOn: work.id,
       reviewOf: work.id

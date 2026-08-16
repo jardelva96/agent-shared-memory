@@ -209,6 +209,13 @@ export const TOOLS: ToolDefinition[] = [
             'Agent that must review the work before it counts as finished. Queues a linked review ' +
             'task that unblocks when the work lands; if the reviewer rejects, the work returns to the queue.'
         },
+        review_open: {
+          type: 'boolean',
+          description:
+            'Queue the review without naming a reviewer: whoever is free takes it, never the agent ' +
+            'that did the work. Use instead of review_by when any capable agent can judge, so a busy ' +
+            'or dead reviewer cannot leave the work waiting forever.'
+        },
         pointer: { type: 'string', description: 'Optional "file::symbol::parameter" the task is about.' }
       },
       required: ['agent', 'title']
@@ -333,6 +340,7 @@ export async function callTool(
         assignedTo: optionalString(args, 'for'),
         pointer: parsePointer(optionalString(args, 'pointer')),
         reviewBy: optionalString(args, 'review_by'),
+        reviewOpen: (args as Record<string, unknown> | null)?.review_open === true,
         dependsOn: optionalString(args, 'after')
           ?.split(',')
           .map(id => id.trim())

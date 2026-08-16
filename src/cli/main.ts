@@ -213,7 +213,8 @@ async function main(): Promise<void> {
           pointer: parsePointer(stringFlag(parsed.flags, 'pointer')),
           parentTaskId: stringFlag(parsed.flags, 'parent'),
           dependsOn: stringFlag(parsed.flags, 'depends-on')?.split(',').map(id => id.trim()).filter(Boolean),
-          reviewBy: stringFlag(parsed.flags, 'review-by')
+          reviewBy: stringFlag(parsed.flags, 'review-by'),
+          reviewOpen: parsed.flags.review === true
         });
         // Building a chain from a script means capturing the id of each part to pass to
         // --depends-on. `claim` and `list` already answer in JSON; create silently ignored
@@ -223,7 +224,10 @@ async function main(): Promise<void> {
           break;
         }
         console.log(`Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`);
-        if (task.reviewTaskId) console.log(`Review queued as ${task.reviewTaskId}, blocked until the work lands`);
+        if (task.reviewTaskId) {
+          const who = stringFlag(parsed.flags, 'review-by') ?? 'whoever is free (never the agent that did the work)';
+          console.log(`Review queued as ${task.reviewTaskId} for ${who}, blocked until the work lands`);
+        }
         break;
       }
       if (sub === 'claim') {

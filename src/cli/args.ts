@@ -17,6 +17,7 @@ const BOOLEAN_FLAGS = new Set([
   'once',
   'all',
   'peek',
+  'review',
   'help'
 ]);
 

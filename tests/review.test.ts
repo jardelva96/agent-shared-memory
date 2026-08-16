@@ -352,3 +352,59 @@ test('a real rejection still rejects, exit code or not', async () => {
     assert.match(bounced.detail!, /nunca expira/);
   });
 });
+
+test('nobody reviews their own work, even when the review is open to anyone', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'implementar', createdBy: 'LEAD', reviewOpen: true });
+    const reviewId = (await service.tasks.read(work.id)).reviewTaskId!;
+    assert.equal((await service.tasks.read(reviewId)).assignedTo, undefined, 'open to anyone');
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    // DEV just finished, so it is the first agent idle -- and the likeliest to grab the
+    // review of its own work if nothing stops it.
+    assert.equal(await service.claimTask('DEV'), undefined, 'the doer is not offered its own review');
+    assert.equal((await service.claimTask('QA'))?.id, reviewId, 'anyone else may take it');
+  });
+});
+
+test('an open review stays open on the next round instead of pinning the first reviewer', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'implementar', createdBy: 'LEAD', reviewOpen: true });
+    const first = (await service.tasks.read(work.id)).reviewTaskId!;
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'v1', 'DEV');
+    await service.claimTask('QA');
+    await service.finishTask(first, 'FAILED', 'faltou tratar lista vazia', 'QA');
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'v2', 'DEV');
+
+    const second = (await service.tasks.read(work.id)).reviewTaskId!;
+    assert.notEqual(second, first);
+    assert.equal((await service.tasks.read(second)).assignedTo, undefined, 'still open, not pinned to QA');
+    assert.equal((await service.claimTask('LEAD'))?.id, second, 'a different free agent can judge round 2');
+  });
+});
+
+test('a named reviewer is still honoured, and still cannot be the doer', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({
+      title: 'implementar',
+      createdBy: 'LEAD',
+      assignedTo: 'DEV',
+      reviewBy: 'DEV'
+    });
+    const reviewId = (await service.tasks.read(work.id)).reviewTaskId!;
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    // Naming the doer as its own reviewer is a misconfiguration. The review stays OPEN
+    // where it can be seen: a review that never happens beats one an agent gives itself.
+    assert.equal(await service.claimTask('DEV'), undefined);
+    assert.equal((await service.tasks.read(reviewId)).status, 'OPEN');
+  });
+});
