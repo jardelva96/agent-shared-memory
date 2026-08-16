@@ -215,6 +215,13 @@ async function main(): Promise<void> {
           dependsOn: stringFlag(parsed.flags, 'depends-on')?.split(',').map(id => id.trim()).filter(Boolean),
           reviewBy: stringFlag(parsed.flags, 'review-by')
         });
+        // Building a chain from a script means capturing the id of each part to pass to
+        // --depends-on. `claim` and `list` already answer in JSON; create silently ignored
+        // the flag, so the only way through was parsing the sentence below.
+        if (parsed.flags.json) {
+          console.log(JSON.stringify(task, null, 2));
+          break;
+        }
         console.log(`Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`);
         if (task.reviewTaskId) console.log(`Review queued as ${task.reviewTaskId}, blocked until the work lands`);
         break;

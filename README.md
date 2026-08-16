@@ -284,6 +284,41 @@ agent-memory task fail --id T-XXXX --message "faltou credencial"
 
 Uma tarefa com `--for` só pode ser reivindicada pelo agente indicado, e chega também na caixa de entrada dele. Ao terminar, quem pediu recebe o resultado — inclusive quando falha.
 
+### Quem faz e quem confere
+
+`--review-by` separa quem executa de quem julga. A revisão é criada **junto** com o trabalho e fica bloqueada até ele terminar, então nenhum trabalho fecha sozinho:
+
+```bash
+agent-memory task create --agent LEAD --for DEV --review-by QA \
+  --title "Implementar mediana(lista)" --detail "..."
+```
+
+Se a revisão reprovar, o trabalho volta para a fila com a objeção anexada ao `detail` — quem repegar começa da objeção, não do zero — e **uma nova revisão é enfileirada** para a próxima rodada. O portão não abre depois da primeira rejeição.
+
+`maxReviewRounds` (padrão 3) impede que executor e revisor que não se entendem troquem rejeições para sempre: passado o limite o trabalho falha para decisão humana.
+
+Um revisor que **morre** (limite de sessão, rede, crash) não conta como reprovação: como o veredito veio do código de saída e não do agente, a revisão volta para a fila em vez de devolver trabalho correto.
+
+### Dividir uma demanda e juntar de volta
+
+`--depends-on` mantém uma tarefa fora da fila até que **todas** as suas dependências estejam `DONE`. É o que permite quebrar uma demanda em partes isoladas, rodá-las em paralelo, e ter uma tarefa que só começa quando o conjunto chegou:
+
+```bash
+# duas partes independentes, uma por agente
+# --json devolve a tarefa inteira; o id é o que --depends-on precisa
+id() { node -pe "JSON.parse(require('fs').readFileSync(0)).id"; }
+A=$(agent-memory task create --agent LEAD --for W1 --title "parte A" --json | id)
+B=$(agent-memory task create --agent LEAD --for W2 --title "parte B" --json | id)
+
+# a síntese só aparece na fila quando A e B terminarem
+agent-memory task create --agent LEAD --for REV --depends-on "$A,$B" \
+  --title "Conferir o conjunto"
+```
+
+Quem reivindica a síntese recebe **os resultados das partes junto com o claim** — sem isso o agente receberia a pergunta com as respostas escondidas. Uma parte que falha mantém a síntese bloqueada: não há o que sintetizar de trabalho que não aconteceu.
+
+Um `--depends-on` para um id inexistente é recusado na criação: ele nunca ficaria `DONE`, então a tarefa esperaria para sempre parecendo saudável na listagem.
+
 ### Runner
 
 O runner reivindica tarefas e executa um comando por tarefa:
@@ -476,6 +511,7 @@ Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `
 | --- | --- |
 | `memory_status` | Estado atual de todos os agentes. Aceita `pointer` para checar sobreposição **antes** de anunciar a intenção. |
 | `memory_read` | `SHARED_MEMORY.md` completo. |
+| `memory_read_pointer` | Lê **só o símbolo** que o ponteiro nomeia, não o arquivo inteiro. Ver [Ler pelo ponteiro](#ler-pelo-ponteiro). |
 | `memory_register` | Registra o agente. Se o id já existe, reanexa em vez de falhar — seguro em reconexões. |
 | `memory_record` | Um passo do ciclo, via `type`: `INTENT`, `READING`, `FOUND`, `CHANGED`, `CREATED`, `TESTING`, `WAITING`, `NOTE`, `DONE`. Retorna as sobreposições detectadas. |
 | `memory_task_create` | Enfileira trabalho durável para outro agente. |
@@ -506,6 +542,31 @@ src/Customers/CustomerRepository.cs
 ```
 
 O sistema normaliza barras e compara arquivo + símbolo para detectar sobreposição.
+
+### Ler pelo ponteiro
+
+O ponteiro não serve só para detectar conflito: `memory_read_pointer` devolve **o símbolo, não o arquivo**, com comentário de doc e as linhas de onde veio.
+
+```text
+memory_read_pointer  pointer="src/core/config.ts::DEFAULT_CONFIG"
+
+src/core/config.ts:6-16 (DEFAULT_CONFIG)
+
+export const DEFAULT_CONFIG: ProjectConfig = {
+  version: 1,
+  ...
+};
+```
+
+Em `src/mcp/tools.ts` a diferença é 27.127 caracteres contra 2.160 — **92% menos leitura para a mesma resposta**.
+
+Isso deixa de ser conforto e passa a ser condição de funcionamento em modelo pequeno. Um 7B local, perguntado quais campos de `ProjectConfig` não têm valor em `DEFAULT_CONFIG` lendo os dois arquivos inteiros, esgotou 14 turnos em 105s sem responder. Com o recorte, respondeu em 2 turnos e 10s. O gargalo era a leitura, não o modelo.
+
+A extração é heurística, não parser: chaves balanceadas para a família C, recuo para Python, e **nada** em vez de um palpite quando o símbolo não é encontrado — um recorte confiante da função errada é pior que recorte nenhum. Chaves dentro de string e de comentário não contam, e uma chamada não é confundida com a declaração.
+
+Leituras são resolvidas sob a raiz do projeto e comparadas depois de resolvidas: o ponteiro vem de um modelo, e um modelo mal instruído pede `../../.ssh/id_rsa`.
+
+O mesmo recorte está disponível para executores locais como a ferramenta `read_pointer` em `examples/task-agent-local.mjs`.
 
 ## Protocolo para colocar no prompt de cada agente
 

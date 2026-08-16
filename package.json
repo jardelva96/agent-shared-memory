@@ -1,6 +1,6 @@
 {
   "name": "agent-shared-memory",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Shared real-time operational memory for multiple coding agents working in the same repository: CLI, MCP server, git watcher, inter-agent messaging and a live dashboard.",
   "type": "module",
   "main": "dist/index.js",
