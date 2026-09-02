@@ -209,6 +209,14 @@ export const TOOLS: ToolDefinition[] = [
             'Agent that must review the work before it counts as finished. Queues a linked review ' +
             'task that unblocks when the work lands; if the reviewer rejects, the work returns to the queue.'
         },
+        reviewers: {
+          type: 'integer',
+          description:
+            'How many agents must judge, 1-9, deciding by majority. This queues an open review panel. One reviewer that ' +
+            'reads the right code can still return the wrong verdict, and alone that is the whole ' +
+            'decision; a majority absorbs it. Costs a review per agent, so use it where being wrong ' +
+            'is expensive, not everywhere.'
+        },
         review_open: {
           type: 'boolean',
           description:
@@ -341,6 +349,7 @@ export async function callTool(
         pointer: parsePointer(optionalString(args, 'pointer')),
         reviewBy: optionalString(args, 'review_by'),
         reviewOpen: (args as Record<string, unknown> | null)?.review_open === true,
+        reviewers: optionalNumber(args, 'reviewers'),
         dependsOn: optionalString(args, 'after')
           ?.split(',')
           .map(id => id.trim())
@@ -628,10 +637,10 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
 
 function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
   const value = args[key];
-  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
     const parsed = Number(value);
-    if (Number.isFinite(parsed)) return Math.trunc(parsed);
+    if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
 }

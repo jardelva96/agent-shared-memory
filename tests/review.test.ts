@@ -13,6 +13,8 @@ async function withProject(fn: (service: AgentMemoryService) => Promise<void>): 
     await service.register('LEAD');
     await service.register('DEV');
     await service.register('QA');
+    await service.register('QA2');
+    await service.register('QA3');
     await fn(service);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -246,7 +248,7 @@ test('the gate stays shut: a rejected review is re-armed for the redone work', a
     assert.notEqual(second.id, review.id, 'a fresh review, so each objection stays readable');
     assert.equal(second.reviewOf, work.id);
 
-    await service.finishTask(review.id, 'DONE', 'conferido', 'QA');
+    await service.finishTask(second.id, 'DONE', 'conferido', 'QA');
     assert.equal((await service.tasks.read(work.id)).status, 'DONE');
   });
 });
@@ -406,5 +408,112 @@ test('a named reviewer is still honoured, and still cannot be the doer', async (
     // where it can be seen: a review that never happens beats one an agent gives itself.
     assert.equal(await service.claimTask('DEV'), undefined);
     assert.equal((await service.tasks.read(reviewId)).status, 'OPEN');
+  });
+});
+
+test('three reviewers decide by majority, and one dissent does not sink the work', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'implementar', createdBy: 'LEAD', reviewers: 3 });
+    assert.equal((await service.tasks.read(work.id)).reviewers, 3);
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    // The measured failure this exists for: a reviewer that reads the right code and still
+    // returns the wrong verdict. Alone it decides; on a panel it is outvoted.
+    const dissent = (await service.claimTask('QA'))!;
+    await service.finishTask(dissent.id, 'FAILED', 'discordo', 'QA');
+    assert.equal((await service.tasks.read(work.id)).status, 'DONE', 'one vote is not the verdict');
+
+    const second = (await service.claimTask('QA2'))!;
+    await service.finishTask(second.id, 'DONE', 'conferido', 'QA2');
+    assert.equal((await service.tasks.read(work.id)).status, 'DONE', 'still one short of a majority');
+
+    const third = (await service.claimTask('QA3'))!;
+    await service.finishTask(third.id, 'DONE', 'conferido', 'QA3');
+    assert.equal((await service.tasks.read(work.id)).status, 'DONE', 'approved 2-1');
+  });
+});
+
+test('a majority to reject sends the work back and stops the seats still working', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'implementar', createdBy: 'LEAD', reviewers: 3 });
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    const a = (await service.claimTask('QA'))!;
+    await service.finishTask(a.id, 'FAILED', 'nao compila', 'QA');
+    const b = (await service.claimTask('QA2'))!;
+    await service.finishTask(b.id, 'FAILED', 'idem', 'QA2');
+
+    const reopened = await service.tasks.read(work.id);
+    assert.equal(reopened.status, 'OPEN', 'rejected 2 of 3');
+    assert.match(reopened.detail ?? '', /nao compila|idem/);
+
+    // The third seat cannot change the outcome, so it is not left costing a model call.
+    const round1 = (await service.tasks.list()).filter(t => t.reviewOf === work.id && (t.reviewRound ?? 1) === 1);
+    assert.equal(round1.filter(t => t.status === 'CANCELLED').length, 1, 'the undecided seat was closed');
+
+    // The only thing left for a free agent is the work itself, back in the queue. No seat
+    // on a round that is already decided is ever handed out again.
+    const next = await service.claimTask('QA3');
+    assert.equal(next?.id, work.id, 'the reopened work, not a spent review');
+  });
+});
+
+test('the next round gets a full panel again, not a single reviewer', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'implementar', createdBy: 'LEAD', reviewers: 3 });
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'v1', 'DEV');
+    await service.finishTask((await service.claimTask('QA'))!.id, 'FAILED', 'errado', 'QA');
+    await service.finishTask((await service.claimTask('QA2'))!.id, 'FAILED', 'errado', 'QA2');
+
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'v2', 'DEV');
+
+    const round2 = (await service.tasks.list()).filter(t => t.reviewOf === work.id && t.reviewRound === 2);
+    assert.equal(round2.length, 3, 'the panel does not shrink after a rejection');
+    assert.ok(round2.every(t => t.status === 'OPEN'));
+  });
+});
+
+test('one agent cannot take two seats on the same panel', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'implementar', createdBy: 'LEAD', reviewers: 3 });
+    await service.claimTask('DEV');
+    await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
+
+    const first = await service.claimTask('QA');
+    assert.ok(first, 'QA takes a seat');
+    // A majority of three where one agent holds two votes is a majority of one in disguise.
+    assert.equal(await service.claimTask('QA'), undefined, 'and only one');
+    assert.ok(await service.claimTask('QA2'), 'a different agent still can');
+  });
+});
+
+test('naming a reviewer and asking for a panel is refused rather than half-honoured', async () => {
+  await withProject(async service => {
+    await assert.rejects(
+      () => service.createTask({ title: 'x', createdBy: 'LEAD', reviewBy: 'QA', reviewers: 3 }),
+      /open review/,
+      'asking one agent three times is three times the cost for one opinion'
+    );
+
+    assert.equal((await service.tasks.list()).length, 0, 'the refused task was never persisted');
+  });
+});
+
+test('reviewer panels reject invalid sizes before queuing anything', async () => {
+  await withProject(async service => {
+    for (const reviewers of [0, -1, 1.5, 10]) {
+      await assert.rejects(
+        () => service.createTask({ title: `painel ${reviewers}`, createdBy: 'LEAD', reviewers }),
+        /reviewers/,
+        `${reviewers} is not a valid panel size`
+      );
+    }
+
+    assert.equal((await service.tasks.list()).length, 0);
   });
 });

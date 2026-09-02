@@ -84,8 +84,19 @@ export interface CreateTaskInput {
    * or dead, at the cost of not choosing who judges.
    */
   reviewOpen?: boolean;
+  /**
+   * How many agents must judge the work. Defaults to one.
+   *
+   * More than one exists because a single reviewer is not reliable: a model that reads the
+   * right code can still return the wrong verdict, and one wrong verdict is the whole
+   * decision. A majority absorbs that. It costs a review per agent, so it is worth it for
+   * work where being wrong is expensive, not as a default.
+   */
+  reviewers?: number;
   /** Marks this task as the review of another. */
   reviewOf?: string;
+  /** Set on a review task: which round of judging it belongs to. */
+  reviewRound?: number;
 }
 
 export interface CreateScheduleInput {
@@ -365,6 +376,12 @@ export class AgentMemoryService {
       if (!exists) throw new Error(`Cannot depend on a task that does not exist: ${id}`);
     }
 
+    const panel = normaliseReviewers(input.reviewers);
+    const wantsReview = input.reviewBy || input.reviewOpen || panel > 0;
+    if (panel > 1 && input.reviewBy) {
+      throw new Error('reviewers > 1 needs an open review: naming one agent gives one opinion, not a majority.');
+    }
+
     const now = nowIso();
     const task: AgentTask = {
       id: createTaskId(),
@@ -380,29 +397,20 @@ export class AgentMemoryService {
       scheduleId: input.scheduleId,
       dependsOn: input.dependsOn,
       reviewOf: input.reviewOf,
+      reviewRound: input.reviewRound,
       createdAt: now,
       updatedAt: now
     };
     await this.tasks.write(task);
 
-    if (input.reviewBy || input.reviewOpen) {
-      // Created here rather than by the executor: the reviewer must exist from the start,
-      // so work cannot quietly close without anyone having looked at it.
-      const review = await this.createTask({
-        title: `Revisar: ${input.title}`,
-        detail:
-          `Revise o trabalho da tarefa ${task.id}. Verifique de fato (leia o codigo, rode o que ` +
-          'houver para rodar). Conclua a revisao como DONE se estiver correto, ou FAILED com o ' +
-          'motivo, o que devolve o trabalho para a fila.',
-        createdBy: input.createdBy,
-        // Left unassigned on purpose when the review is open: the queue hands it to whoever
-        // is free, and claim() keeps it away from the agent that did the work.
-        assignedTo: input.reviewBy,
-        pointer: input.pointer,
-        dependsOn: task.id,
-        reviewOf: task.id
-      });
-      task.reviewTaskId = review.id;
+    if (wantsReview) {
+      // A panel of one is the ordinary case and stays a single task. More than one is only
+      // meaningful when nobody is named: asking the same agent to judge three times is
+      // three times the cost for exactly one opinion.
+      const seats = panel || 1;
+      task.reviewers = seats;
+      const reviews = await this.queueReviewPanel(task, 1, input.createdBy, input.reviewBy, seats);
+      task.reviewTaskId = reviews[0].id;
       task.updatedAt = nowIso();
       await this.tasks.write(task);
     }
@@ -465,7 +473,12 @@ export class AgentMemoryService {
     by?: string,
     options: FinishOptions = {}
   ): Promise<AgentTask> {
-    const task = await this.tasks.finish(id, status, result, by);
+    const { task, closed } = await this.tasks.finish(id, status, result, by);
+
+    // Nothing changed, so there is no new verdict to settle and no new result to announce.
+    // The runner calls this after the agent already closed the task through the tools, and
+    // settling twice counts one reviewer's vote twice.
+    if (!closed) return task;
 
     if (task.reviewOf) {
       // A reviewer that died never judged anything. Because tasks.finish ignores a verdict
@@ -551,6 +564,73 @@ export class AgentMemoryService {
     );
   }
 
+  /**
+   * Queues the reviews for one round of judging on `work`.
+   *
+   * Every review of a round carries the same `reviewRound`, which is what lets a verdict be
+   * counted against its own panel instead of against every review the work ever collected.
+   */
+  private async queueReviewPanel(
+    work: AgentTask,
+    round: number,
+    createdBy: string,
+    assignedTo: string | undefined,
+    panel: number,
+    objection?: string
+  ): Promise<AgentTask[]> {
+    const ordinal = round > 1 ? ` (rodada ${round})` : '';
+    const previous = objection
+      ? `A rodada anterior rejeitou: ${objection}. `
+      : '';
+
+    const reviews: AgentTask[] = [];
+    for (let seat = 1; seat <= panel; seat++) {
+      const seatLabel = panel > 1 ? ` [${seat}/${panel}]` : '';
+      reviews.push(
+        await this.createTask({
+          title: `Revisar${ordinal}${seatLabel}: ${work.title}`,
+          detail:
+            `Revise o trabalho da tarefa ${work.id}. ${previous}Verifique de fato (leia o codigo, ` +
+            'rode o que houver para rodar). Conclua a revisao como DONE se estiver correto, ou ' +
+            'FAILED com o motivo, o que devolve o trabalho para a fila.' +
+            (panel > 1
+              ? ` Voce e um de ${panel} revisores; o veredito e por maioria, entao julgue por conta propria.`
+              : ''),
+          createdBy,
+          // Left unassigned when the review is open: the queue hands it to whoever is free,
+          // and claim() keeps it away from the agent that did the work.
+          assignedTo,
+          pointer: work.pointer,
+          dependsOn: work.id,
+          reviewOf: work.id,
+          reviewRound: round
+        })
+      );
+    }
+    return reviews;
+  }
+
+  /**
+   * Cancels the seats that have not voted once the outcome can no longer change.
+   *
+   * A reviewer still working on a decided round costs a real model call for an opinion that
+   * cannot move anything, so the panel closes as soon as the majority exists rather than
+   * waiting for unanimity.
+   */
+  private async closeUndecided(panel: AgentTask[], why: string): Promise<void> {
+    for (const seat of panel) {
+      if (seat.status === 'OPEN' || seat.status === 'CLAIMED') {
+        await this.tasks.finish(seat.id, 'CANCELLED', why).catch(() => undefined);
+      }
+    }
+  }
+
+  /** The reviews making up one round's panel, in creation order. */
+  private async reviewPanel(workId: string, round: number): Promise<AgentTask[]> {
+    const all = await this.tasks.list();
+    return all.filter(task => task.reviewOf === workId && (task.reviewRound ?? 1) === round);
+  }
+
   /** Applies a review verdict to the work it judged. */
   private async settleReview(review: AgentTask, status: TaskStatus, result?: string): Promise<void> {
     if (!review.reviewOf) return;
@@ -561,18 +641,44 @@ export class AgentMemoryService {
       return; // The work was removed; nothing to settle.
     }
 
-    if (status === 'DONE') {
+    // One verdict is not the verdict when a panel is judging. Votes are counted within
+    // this review's own round, so a rejection from round 1 never counts against round 2.
+    const round = review.reviewRound ?? 1;
+    const panel = await this.reviewPanel(work.id, round);
+    const seats = Math.max(panel.length, work.reviewers ?? 1);
+    const approvals = panel.filter(seat => seat.status === 'DONE').length;
+    const rejections = panel.filter(seat => seat.status === 'FAILED').length;
+    const majority = Math.floor(seats / 2) + 1;
+    // An even panel can split. Nobody reaches a majority, so the work would wait forever;
+    // a split is treated as "not approved", because approving needs agreement and doubt is
+    // not agreement.
+    const allIn = approvals + rejections >= seats;
+
+    if (approvals >= majority) {
+      // Decided. The seats still waiting have nothing left to add and would only cost money.
+      await this.closeUndecided(panel, `maioria ja aprovou ${work.id} (${approvals}/${seats})`);
       await this.store.appendActivity(
         this.makeActivity({
           agentId: review.claimedBy ?? review.createdBy,
           type: 'TASK',
-          description: `revisao aprovou ${work.id}: ${work.title}`,
+          description:
+            seats > 1
+              ? `revisao aprovou ${work.id} por maioria (${approvals}/${seats}): ${work.title}`
+              : `revisao aprovou ${work.id}: ${work.title}`,
           pointer: work.pointer
         }),
         { history: false }
       );
       return;
     }
+
+    if (rejections < majority && !allIn) return; // Still short of a decision; wait for the rest.
+
+    const split = rejections < majority;
+    if (split) {
+      result = `painel empatou ${approvals}x${rejections} sem maioria; ultima objecao: ${result ?? 'sem motivo'}`;
+    }
+    await this.closeUndecided(panel, `maioria ja rejeitou ${work.id} (${rejections}/${seats})`);
 
     // Rejected: the work goes back to the queue carrying the reason, so whoever picks it
     // up next starts from the objection instead of repeating the same mistake.
@@ -627,21 +733,17 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     // while its own runner is still exiting, and the exit code would then overwrite the
     // rejection the agent just recorded -- turning a reject into an approval. Leaving each
     // round closed also keeps the objections readable one by one.
-    const next = await this.createTask({
-      title: `Revisar (rodada ${rounds + 1}): ${work.title}`,
-      detail:
-        `Revise novamente a tarefa ${work.id}, que voltou para a fila depois da rodada ${rounds}. ` +
-        `Objecao anterior: ${result ?? 'sem motivo'}. Verifique de fato (leia o codigo, rode o que ` +
-        'houver para rodar). Conclua como DONE se estiver correto, ou FAILED com o motivo.',
-      createdBy: review.createdBy,
-      // An open review stays open for the next round. Falling back to whoever happened to
-      // claim it would quietly pin every later round to the first agent that showed up.
-      assignedTo: review.assignedTo,
-      pointer: work.pointer,
-      dependsOn: work.id,
-      reviewOf: work.id
-    });
-    work.reviewTaskId = next.id;
+    // An open review stays open for the next round. Falling back to whoever happened to
+    // claim it would quietly pin every later round to the first agent that showed up.
+    const next = await this.queueReviewPanel(
+      work,
+      rounds + 1,
+      review.createdBy,
+      review.assignedTo,
+      seats,
+      result
+    );
+    work.reviewTaskId = next[0].id;
     work.updatedAt = nowIso();
     await this.tasks.write(work);
 
@@ -888,4 +990,15 @@ function statusFor(type: ActivityType, previous: AgentStatus): AgentStatus {
     case 'TASK':
       return previous;
   }
+}
+
+function normaliseReviewers(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('reviewers must be a positive integer.');
+  }
+  if (value > 9) {
+    throw new Error('reviewers must be 9 or fewer; queue a smaller panel or split the work.');
+  }
+  return value;
 }

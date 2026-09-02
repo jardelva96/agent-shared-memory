@@ -1,8 +1,43 @@
 # Agent Shared Memory
 
-Uma memória operacional compartilhada para vários agentes de IA trabalhando no mesmo repositório.
+Memória operacional compartilhada para vários agentes de IA trabalhando no mesmo repositório.
+
+**Agent Shared Memory** é uma ferramenta local para coordenar agentes de programação como Codex,
+Claude Code, Cursor, modelos via Ollama ou qualquer runner que consiga executar comandos. Ela cria
+uma pasta `.agents/` dentro do projeto monitorado e mantém, em arquivos versionáveis ou locais, o
+estado atual de cada agente, intenções de mudança, histórico, mensagens, fila de tarefas,
+agendamentos, revisões e um dashboard ao vivo.
 
 A proposta é simples: antes de uma alteração relevante, o agente anuncia **o que vai fazer**, **onde vai mexer** e **por quê**. Durante o trabalho, todos conseguem ver o estado atual dos demais. Depois da alteração, o agente registra o resultado no seu próprio histórico.
+
+## Por que existe
+
+Quando dois ou mais agentes trabalham no mesmo código, o problema não é só concorrência de Git. O
+problema real é operacional: um agente não sabe o que o outro leu, que arquivo pretende tocar, qual
+mudança já foi feita, quem está bloqueado, qual tarefa ficou pendente e se uma revisão realmente
+aconteceu.
+
+Este projeto resolve isso com uma coordenação simples, local-first e auditável:
+
+- **memória compartilhada** gerada automaticamente em `.agents/SHARED_MEMORY.md`;
+- **estado individual** por agente em JSON e histórico append-only em Markdown;
+- **detecção de sobreposição** por ponteiros semânticos como `arquivo::Classe.metodo()`;
+- **mensagens diretas** e dependências explícitas entre agentes;
+- **fila durável de tarefas**, com claim, retry, dead-letter, dependências e síntese;
+- **revisão obrigatória**, incluindo painel aberto com `--reviewers N` e decisão por maioria;
+- **runner local** para executar agentes por CLI, API local ou scripts próprios;
+- **servidor MCP** para expor tudo como ferramentas nativas a clientes compatíveis;
+- **watcher de Git** para comparar mudanças reais do working tree com o que foi declarado;
+- **dashboard local** via SSE para acompanhar agentes, conflitos, inbox e atividade.
+
+## Status do projeto
+
+- Linguagem: TypeScript, Node.js 20+.
+- Pacote: `agent-shared-memory`.
+- Binário: `agent-memory`.
+- Versão atual: `1.2.0`.
+- Testes locais: `npm test`.
+- Build: `npm run build`.
 
 ## Estrutura gerada no projeto monitorado
 
@@ -44,6 +79,35 @@ A proposta é simples: antes de uma alteração relevante, o agente anuncia **o 
 
 - Node.js 20+
 - npm
+
+## Comece em 2 minutos
+
+```bash
+npm install
+npm run build
+npm link
+
+cd /caminho/do/projeto
+agent-memory init --name "Meu Projeto"
+agent-memory register --agent AGENT-01 --role Backend --task AUTH-184
+agent-memory status
+agent-memory serve
+```
+
+Abra o dashboard local:
+
+```text
+http://127.0.0.1:4317
+```
+
+Em outro terminal ou em outro agente, use outro id apontando para a mesma raiz:
+
+```bash
+agent-memory register --agent AGENT-02 --role Frontend --task UI-210
+agent-memory intent --agent AGENT-02 --task UI-210 \
+  --pointer "src/app/page.tsx::HomePage" \
+  --message "Ajustar o estado vazio da tela inicial"
+```
 
 ## Instalação
 
@@ -294,6 +358,15 @@ agent-memory task create --agent LEAD --for DEV --review-by QA \
 ```
 
 Se a revisão reprovar, o trabalho volta para a fila com a objeção anexada ao `detail` — quem repegar começa da objeção, não do zero — e **uma nova revisão é enfileirada** para a próxima rodada. O portão não abre depois da primeira rejeição.
+
+Quando qualquer agente capaz pode conferir, use `--review` para deixar a revisão aberta. Para trabalho caro de errar, `--reviewers N` cria um painel aberto de 1 a 9 revisores e decide por maioria:
+
+```bash
+agent-memory task create --agent LEAD --for DEV --reviewers 3 \
+  --title "Migrar cobrança" --detail "Precisa de maioria antes de fechar"
+```
+
+Cada assento do painel precisa ser reivindicado por um agente diferente, e o executor nunca recebe a revisão do próprio trabalho. Se a maioria reprovar, os assentos restantes são cancelados e o trabalho volta para a fila; se um painel par empatar, o resultado conta como não aprovado.
 
 `maxReviewRounds` (padrão 3) impede que executor e revisor que não se entendem troquem rejeições para sempre: passado o limite o trabalho falha para decisão humana.
 

@@ -10,6 +10,12 @@ const ACTIVE: TaskStatus[] = ['OPEN', 'CLAIMED'];
 /** A verdict has been given; nothing may overwrite it. */
 const TERMINAL: TaskStatus[] = ['DONE', 'FAILED', 'CANCELLED'];
 
+/** `closed` is false when the task was already terminal and this call changed nothing. */
+export interface FinishResult {
+  task: AgentTask;
+  closed: boolean;
+}
+
 export interface TaskFilter {
   status?: TaskStatus[];
   agent?: string;
@@ -113,7 +119,7 @@ export class TaskStore {
           task.status === 'OPEN' &&
           (!task.assignedTo || task.assignedTo === agentId) &&
           dependenciesOf(task).every(id => done.has(id)) &&
-          !reviewsOwnWork(task, agentId, byId)
+          !cannotJudge(task, agentId, byId, tasks)
       );
       if (!candidate) return undefined;
 
@@ -135,7 +141,7 @@ export class TaskStore {
    * it write the result anyway would overwrite the new holder's work with the output of a
    * run everyone had given up on.
    */
-  async finish(id: string, status: TaskStatus, result?: string, by?: string): Promise<AgentTask> {
+  async finish(id: string, status: TaskStatus, result?: string, by?: string): Promise<FinishResult> {
     const p = this.paths;
     return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
       const task = await this.read(id);
@@ -144,7 +150,11 @@ export class TaskStore {
       // The runner then calls finish again from the exit code, and a process that exits 0
       // after recording FAILED would flip it back to DONE — which silently defeats the
       // review gate, since a rejected review would never return the work to the queue.
-      if (TERMINAL.includes(task.status)) return task;
+      //
+      // `closed: false` says the call changed nothing. The caller needs that to know a
+      // verdict is new: settling a review twice counts one reviewer's vote twice, and with
+      // a panel that is enough to decide a round on its own.
+      if (TERMINAL.includes(task.status)) return { task, closed: false };
 
       if (by && task.claimedBy && task.claimedBy !== by) {
         throw new Error(
@@ -158,7 +168,7 @@ export class TaskStore {
       task.updatedAt = now;
       task.claimExpiresAt = undefined;
       await this.write(task);
-      return task;
+      return { task, closed: true };
     });
   }
 
@@ -235,19 +245,37 @@ export class ScheduleStore {
 }
 
 /**
- * Whether this task would have an agent judge its own work.
+ * Whether handing this review to `agentId` would make the verdict worth less than nothing.
  *
- * Matters most once reviews are left open to whoever is free: the agent that just finished
- * the work is usually the first one idle, so without this it is the *likeliest* reviewer.
- * "Done" would go back to being self-declared, with a review task to make it look otherwise.
+ * Two ways that happens. An agent judging its own work: it matters most once reviews are
+ * left open to whoever is free, because the agent that just finished is usually the first
+ * one idle, so without this it is the *likeliest* reviewer. "Done" would go back to being
+ * self-declared, with a review task to make it look otherwise.
+ *
+ * And an agent taking a second seat on the same panel: a majority of three where one agent
+ * holds two of the votes is a majority of one wearing a disguise.
  *
  * A review explicitly assigned to the agent that did the work is skipped too, and stays
  * OPEN where someone can see it. A review that never happens is a visible problem; a review
  * an agent gives itself is an invisible one.
  */
-function reviewsOwnWork(task: AgentTask, agentId: string, byId: Map<string, AgentTask>): boolean {
+function cannotJudge(
+  task: AgentTask,
+  agentId: string,
+  byId: Map<string, AgentTask>,
+  all: AgentTask[]
+): boolean {
   if (!task.reviewOf) return false;
-  return byId.get(task.reviewOf)?.claimedBy === agentId;
+  if (byId.get(task.reviewOf)?.claimedBy === agentId) return true;
+
+  const round = task.reviewRound ?? 1;
+  return all.some(
+    other =>
+      other.id !== task.id &&
+      other.reviewOf === task.reviewOf &&
+      (other.reviewRound ?? 1) === round &&
+      other.claimedBy === agentId
+  );
 }
 
 /** Normalises the single-value form tasks written before dependsOn took a list. */

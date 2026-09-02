@@ -8,14 +8,16 @@ import { fileURLToPath } from 'node:url';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli', 'main.ts');
 
-function cli(root: string, args: string[]): Promise<{ code: number; stdout: string }> {
+function cli(root: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise(resolve => {
     const child = spawn(process.execPath, ['--import', 'tsx', CLI, '--root', root, ...args], {
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'pipe']
     });
     let stdout = '';
+    let stderr = '';
     child.stdout.on('data', chunk => (stdout += chunk));
-    child.on('exit', code => resolve({ code: code ?? -1, stdout: stdout.trim() }));
+    child.stderr.on('data', chunk => (stderr += chunk));
+    child.on('exit', code => resolve({ code: code ?? -1, stdout: stdout.trim(), stderr: stderr.trim() }));
   });
 }
 
@@ -39,6 +41,23 @@ test('task create --json answers with the task, so a chain can be scripted', asy
 
     const plain = await cli(root, ['task', 'create', '--agent', 'LEAD', '--title', 'parte B']);
     assert.match(plain.stdout, /^Queued T-/, 'without the flag it still reads like a sentence');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('task create rejects invalid reviewer panel sizes without writing a task', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-cli-'));
+  try {
+    await cli(root, ['init', '--name', 'Panel']);
+    await cli(root, ['register', '--agent', 'LEAD']);
+
+    const bad = await cli(root, ['task', 'create', '--agent', 'LEAD', '--title', 'x', '--reviewers', '0']);
+    assert.equal(bad.code, 1);
+    assert.match(bad.stderr, /positive integer/);
+
+    const listed = await cli(root, ['task', 'list', '--json']);
+    assert.deepEqual(JSON.parse(listed.stdout), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

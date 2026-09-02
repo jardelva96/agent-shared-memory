@@ -214,7 +214,8 @@ async function main(): Promise<void> {
           parentTaskId: stringFlag(parsed.flags, 'parent'),
           dependsOn: stringFlag(parsed.flags, 'depends-on')?.split(',').map(id => id.trim()).filter(Boolean),
           reviewBy: stringFlag(parsed.flags, 'review-by'),
-          reviewOpen: parsed.flags.review === true
+          reviewOpen: parsed.flags.review === true,
+          reviewers: numberFlag(parsed.flags, 'reviewers')
         });
         // Building a chain from a script means capturing the id of each part to pass to
         // --depends-on. `claim` and `list` already answer in JSON; create silently ignored
@@ -226,7 +227,8 @@ async function main(): Promise<void> {
         console.log(`Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''}`);
         if (task.reviewTaskId) {
           const who = stringFlag(parsed.flags, 'review-by') ?? 'whoever is free (never the agent that did the work)';
-          console.log(`Review queued as ${task.reviewTaskId} for ${who}, blocked until the work lands`);
+          const panel = task.reviewers && task.reviewers > 1 ? `${task.reviewers} reviewers, majority decides; first is ` : '';
+          console.log(`Review queued as ${panel}${task.reviewTaskId} for ${who}, blocked until the work lands`);
         }
         break;
       }
@@ -451,8 +453,9 @@ async function main(): Promise<void> {
       const autoCompact = numberFlag(parsed.flags, 'auto-compact');
       const claimSeconds = numberFlag(parsed.flags, 'claim-seconds');
       const maxAttempts = numberFlag(parsed.flags, 'max-attempts');
+      const maxDepth = numberFlag(parsed.flags, 'max-depth');
       if (stale === undefined && recent === undefined && name === undefined && autoCompact === undefined
-          && claimSeconds === undefined && maxAttempts === undefined) {
+          && claimSeconds === undefined && maxAttempts === undefined && maxDepth === undefined) {
         console.log(JSON.stringify(await service.config(), null, 2));
         break;
       }
@@ -462,7 +465,8 @@ async function main(): Promise<void> {
         ...(name !== undefined ? { projectName: name } : {}),
         ...(autoCompact !== undefined ? { autoCompactAfterEvents: autoCompact } : {}),
         ...(claimSeconds !== undefined ? { taskClaimSeconds: claimSeconds } : {}),
-        ...(maxAttempts !== undefined ? { maxTaskAttempts: maxAttempts } : {})
+        ...(maxAttempts !== undefined ? { maxTaskAttempts: maxAttempts } : {}),
+        ...(maxDepth !== undefined ? { maxTaskDepth: maxDepth } : {})
       });
       console.log(JSON.stringify(config, null, 2));
       break;
@@ -521,10 +525,14 @@ function truncate(value: string, width: number): string {
 }
 
 function printHelp(): void {
-  console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000]\n  compact [--keep 500] [--history] [--dry-run]\n\nWork queue:\n  task create --agent A --title "..." [--detail "..."] [--for B] [--pointer "..."]\n                [--review-by C]        queue a review that must accept the work\n                [--depends-on T1,T2]   stay out of the queue until all of them are DONE\n  task list [--status OPEN] [--agent A] [--json]\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
+  console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000] [--max-depth 3]\n  compact [--keep 500] [--history] [--dry-run]\n\nWork queue:\n  task create --agent A --title "..." [--detail "..."] [--for B] [--pointer "..."]\n                [--review-by C]        queue a review that must accept the work
+                [--review]             same, but open to whoever is free (never the doer)
+                [--reviewers 3]        queue an open panel (1-9); majority decides\n                [--depends-on T1,T2]   stay out of the queue until all of them are DONE
+                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--json]\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
 }
 
 main().catch(error => {
   console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
+

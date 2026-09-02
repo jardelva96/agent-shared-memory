@@ -105,6 +105,10 @@ export interface AgentTask {
   reviewTaskId?: string;
   /** Set on a work task: how many times a review has sent it back. */
   reviewRounds?: number;
+  /** Set on a work task: how many reviewers must judge each round. Absent means one. */
+  reviewers?: number;
+  /** Set on a review task: which round of judging it belongs to, counting from 1. */
+  reviewRound?: number;
   createdAt: string;
   updatedAt: string;
 }

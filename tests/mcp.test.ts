@@ -261,6 +261,28 @@ test('a task cannot be queued behind an id that does not exist', async () => {
   });
 });
 
+test('MCP task create can queue an open review panel', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Panel');
+    await call('memory_register', { agent: 'LEAD' });
+
+    const created = await call('memory_task_create', { agent: 'LEAD', title: 'troca sensivel', reviewers: 3 });
+    assert.notEqual(created.isError, true);
+    assert.match(created.content[0].text, /Review queued as T-/);
+
+    const tasks = await service.tasks.list();
+    const work = tasks.find(task => task.title === 'troca sensivel')!;
+    const reviews = tasks.filter(task => task.reviewOf === work.id);
+    assert.equal(work.reviewers, 3);
+    assert.equal(reviews.length, 3);
+    assert.ok(reviews.every(task => task.assignedTo === undefined));
+
+    const bad = await call('memory_task_create', { agent: 'LEAD', title: 'decimal', reviewers: 2.5 });
+    assert.equal(bad.isError, true);
+    assert.match(bad.content[0].text, /positive integer/);
+  });
+});
+
 test('a pointer reads the symbol, not the file around it', async () => {
   await withServer(async (call, _methods, service) => {
     await service.init('Pointer');
