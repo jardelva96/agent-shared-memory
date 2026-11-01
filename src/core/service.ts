@@ -308,8 +308,39 @@ export class AgentMemoryService {
     await this.store.writeState(next);
     await this.store.appendActivity(activity);
     await this.notifyDependency(input, state);
+    await this.notifyOverlap(input, state, conflicts);
     await this.afterWrite(config);
     return { activity, state: next, conflicts };
+  }
+
+  /**
+   * An overlap used to reach only the agent that announced second. The one already on the
+   * file never heard of it -- and in a measured run that was the agent that wrote last, from
+   * a read taken before the newcomer's change, and erased it. Whoever is already there is
+   * told as well, through the inbox their tools already surface.
+   */
+  private async notifyOverlap(input: ActivityInput, previous: AgentState, conflicts: Conflict[]): Promise<void> {
+    if (!input.pointer || conflicts.length === 0) return;
+    // A write is what makes everyone else's copy stale, so every write is announced. An
+    // announcement is not: once per arrival on a file is enough -- and the measured run
+    // showed that arrival alone was not, because both agents arrived before either wrote.
+    const wrote = input.type === 'CHANGED' || input.type === 'CREATED';
+    if (!wrote && previous.current?.pointer?.file === input.pointer.file) return;
+
+    for (const conflict of conflicts) {
+      if (conflict.agentId === input.agentId) continue;
+      await this.deliver({
+        from: input.agentId,
+        to: conflict.agentId,
+        body: wrote
+          ? `${input.agentId} just changed ${formatPointer(input.pointer)}: ${input.description}. ` +
+            'Your copy is stale: re-read it before you write, and keep their change.'
+          : `${input.agentId} is now also working on ${formatPointer(input.pointer)}: ${input.description}. ` +
+            'Re-read it right before you write, and keep their change.',
+        pointer: input.pointer,
+        kind: 'overlap'
+      }, { history: false }).catch(() => undefined);
+    }
   }
 
   /**
@@ -858,7 +889,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     return { messages, unread };
   }
 
-  private async deliver(input: SendMessageInput): Promise<AgentMessage> {
+  private async deliver(input: SendMessageInput, options: { history?: boolean } = {}): Promise<AgentMessage> {
     if (!(await this.store.stateExists(input.to))) {
       throw new Error(`Cannot deliver to an unregistered agent: ${input.to}`);
     }
@@ -873,7 +904,9 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     };
     await this.messages.append(message);
 
-    // Mirrored into the journal so the panel and the feed show that contact happened.
+    // Mirrored into the journal so the panel and the feed show that contact happened. A notice
+    // the system sends on an agent's behalf stays out of that agent's own history: it is not
+    // something the agent did.
     await this.store.appendActivity(
       this.makeActivity({
         agentId: input.from,
@@ -881,7 +914,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
         description: `-> ${input.to}: ${input.body}`,
         pointer: input.pointer
       }, message.timestamp),
-      { history: await this.store.stateExists(input.from) }
+      { history: options.history !== false && (await this.store.stateExists(input.from)) }
     );
     return message;
   }

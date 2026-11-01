@@ -211,3 +211,35 @@ test('the MCP tools send and read messages end to end', async () => {
     assert.match(all.content[0].text, /terminei CancelAsync/);
   });
 });
+
+test('the agent already on a file is told when another one arrives', async () => {
+  // Measured with real agents: the newcomer was warned, the one already there was not, and
+  // that one wrote last from a stale read and erased the newcomer's function.
+  await withProject(async (service, call) => {
+    await service.register('FIRST');
+    await service.register('SECOND');
+    await service.activity({ agentId: 'FIRST', type: 'INTENT', description: 'quebrarLinhas', pointer: parsePointer('src/texto.js') });
+
+    const second = await service.activity({ agentId: 'SECOND', type: 'INTENT', description: 'contarPalavras', pointer: parsePointer('src/texto.js') });
+    assert.equal(second.conflicts.length, 1, 'the newcomer is warned, as before');
+
+    const inbox = await service.readInbox('FIRST', { markRead: false });
+    assert.equal(inbox.messages.length, 1);
+    assert.equal(inbox.messages[0].kind, 'overlap');
+    assert.match(inbox.messages[0].body, /SECOND .*src\/texto\.js.*Re-read/);
+
+    // Announcing again on the same file does not repeat the notice...
+    await service.activity({ agentId: 'SECOND', type: 'TESTING', description: 'rodando os testes', pointer: parsePointer('src/texto.js') });
+    assert.equal((await service.readInbox('FIRST', { markRead: false })).messages.length, 1);
+
+    // ...but a write does: it is what made the first agent's copy stale.
+    await service.activity({ agentId: 'SECOND', type: 'CHANGED', description: 'contarPalavras pronta', pointer: parsePointer('src/texto.js') });
+    const after = await service.readInbox('FIRST', { markRead: false });
+    assert.equal(after.messages.length, 2);
+    assert.match(after.messages[1].body, /SECOND just changed .*stale/);
+
+    // And the first agent's next record says there is something to read before writing.
+    const recorded = await call('memory_record', { agent: 'FIRST', type: 'CHANGED', message: 'quebrarLinhas pronta', pointer: 'src/texto.js' });
+    assert.match(recorded.content[0].text, /2 unread message\(s\)/);
+  });
+});

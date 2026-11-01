@@ -508,6 +508,10 @@ async function recordText(
       'Do not undo their work. Adjust your change to coexist, or record a WAITING entry naming the agent you depend on.'
     );
   }
+  // Someone may have arrived on this agent's file since it last looked; that notice is only
+  // useful if it is seen before the next write, and recording is the call agents make.
+  const unread = await service.messages.unreadCount(agentId);
+  if (unread > 0) lines.push('', `You have ${unread} unread message(s). Call memory_inbox before writing.`);
   return lines.join('\n');
 }
 
@@ -600,7 +604,7 @@ async function inboxText(
 
   const lines: string[] = [];
   for (const message of shown) {
-    const tag = message.kind === 'waiting' ? ' [dependency]' : '';
+    const tag = message.kind === 'waiting' ? ' [dependency]' : message.kind === 'overlap' ? ' [same file]' : '';
     lines.push(`${message.timestamp} | from ${message.from}${tag}`);
     lines.push(`  ${message.body}`);
     if (message.pointer) lines.push(`  ${formatPointer(message.pointer)}`);

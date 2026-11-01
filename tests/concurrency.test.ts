@@ -35,9 +35,14 @@ test('independent processes writing at once lose nothing and corrupt nothing', a
     const failures = results.filter(r => r.code !== 0);
     assert.deepEqual(failures.map(f => f.stderr), [], 'no agent process may die under contention');
 
-    // The journal must hold every REGISTERED plus every activity, all parseable.
+    // The journal must hold every REGISTERED plus every activity, all parseable. The agents
+    // share two files, so the system also journals the overlap notices it sends them; those
+    // are counted apart, since how many arrive depends on how the processes interleave.
     const journal = await readFile(path.join(root, '.agents', 'events', 'events.jsonl'), 'utf8');
-    const lines = journal.split('\n').filter(Boolean);
+    const lines = journal
+      .split('\n')
+      .filter(Boolean)
+      .filter(line => (JSON.parse(line) as { type: string }).type !== 'MESSAGE');
     const perAgent = new Map<string, number>();
     for (const line of lines) {
       const event = JSON.parse(line) as { agentId: string };

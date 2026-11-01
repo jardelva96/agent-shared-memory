@@ -148,7 +148,7 @@ async function main(): Promise<void> {
         break;
       }
       for (const message of shown) {
-        const tag = message.kind === 'waiting' ? ' [dependency]' : '';
+        const tag = message.kind === 'waiting' ? ' [dependency]' : message.kind === 'overlap' ? ' [same file]' : '';
         console.log(`${message.timestamp} | from ${message.from}${tag}`);
         console.log(`  ${message.body}`);
         if (message.pointer) console.log(`  ${formatPointer(message.pointer)}`);
