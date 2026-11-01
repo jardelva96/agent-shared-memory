@@ -39,6 +39,32 @@ test('a call is not mistaken for the declaration', () => {
   assert.doesNotMatch(found.text, /function caller/);
 });
 
+test('a type used in a signature is not mistaken for its declaration', () => {
+  // The shape of src/mcp/tools.ts, where asking for ToolDefinition handed back buildTools.
+  const source = [
+    'export interface Item {',
+    '  name: string;',
+    '}',
+    '',
+    'export function build(x?: string): Item[] {',
+    '  return [];',
+    '}',
+    '',
+    'class Holder {',
+    '  private item: Item;',
+    '}'
+  ].join('\n');
+
+  const found = extractSymbol(source, 'Item')!;
+  assert.equal(found.startLine, 1);
+  assert.equal(found.endLine, 3);
+
+  // Not won on order: with the use first, the declaration still comes back.
+  const useFirst = ['def make() -> Item:', '    return Item()', '', 'class Item:', '    name = ""'].join('\n');
+  const python = extractSymbol(useFirst, 'Item')!;
+  assert.match(python.text, /^class Item:/);
+});
+
 test('a brace inside a string or comment does not end the block early', () => {
   const source = [
     'export function render() {',
@@ -140,4 +166,127 @@ test('a body that opens and closes on one line stops there', () => {
 test('a brace inside a string on the declaration line is not a body', () => {
   const source = ['const sep = "{";', 'const depois = 1;'].join('\n');
   assert.equal(extractSymbol(source, 'sep')!.text, 'const sep = "{";');
+});
+
+test('a C# body that opens on the next line comes back whole', () => {
+  // Found on a real .NET project: with "{" on its own line the declaration balanced on
+  // the first line, so the slice ended after the first statement -- or, for a signature
+  // spanning two lines, before the body even started.
+  const source = [
+    'public sealed class Clube',
+    '{',
+    '    public const int DenunciasParaOcultar = 3;',
+    '',
+    '    /// <summary>Publica um comentario.</summary>',
+    '    public async Task<(Falha Falha, int? Id)> ComentarAsync(int clubeId, string? texto,',
+    '        string? trecho = null, CancellationToken ct = default)',
+    '    {',
+    '        if (texto is null) return (Falha.Vazio, null);',
+    '        var id = await SalvarAsync(texto, ct);',
+    '        return (Falha.Nenhuma, id);',
+    '    }',
+    '',
+    '    public static bool Vale(string? v) =>',
+    '        v is not null;',
+    '}'
+  ].join('\n');
+
+  const method = extractSymbol(source, 'ComentarAsync')!;
+  assert.equal(method.startLine, 5, 'doc comment included');
+  assert.equal(method.endLine, 12, 'through the closing brace of the body');
+  assert.match(method.text, /return \(Falha\.Nenhuma, id\);/);
+
+  const arrow = extractSymbol(source, 'Vale')!;
+  assert.equal(arrow.endLine, 15, 'an expression body ends at its semicolon');
+  assert.equal(extractSymbol(source, 'DenunciasParaOcultar')!.endLine, 3);
+});
+
+test('an enum with its brace on the next line keeps every member', () => {
+  const source = ['public enum Estado', '{', '    NaFila = 0,', '    Traduzindo = 1,', '    Falhou = 7', '}', '', 'public class Depois {}'].join('\n');
+  const found = extractSymbol(source, 'Estado')!;
+  assert.equal(found.endLine, 6);
+  assert.match(found.text, /Falhou = 7/);
+  assert.doesNotMatch(found.text, /Depois/);
+});
+
+test('a C# declaration with its type before the name beats a line that only calls it', () => {
+  const source = [
+    'public class Contexto',
+    '{',
+    '    public override int SaveChanges()',
+    '    {',
+    '        var acervo = MexeNoAcervo();',
+    '        return 1;',
+    '    }',
+    '',
+    '    private bool MexeNoAcervo() => ChangeTracker.Entries().Any(e =>',
+    '        e.State != EntityState.Unchanged);',
+    '',
+    '    public EscolaStatus Status { get; set; }',
+    '}',
+    '',
+    'public enum EscolaStatus { Ativa, Suspensa }'
+  ].join('\n');
+
+  const method = extractSymbol(source, 'MexeNoAcervo')!;
+  assert.equal(method.startLine, 9);
+  assert.equal(method.endLine, 10);
+  // A property typed EscolaStatus comes first, but the enum is what declares the name.
+  assert.equal(extractSymbol(source, 'EscolaStatus')!.startLine, 15);
+});
+
+test('a name inside quotes or a regex brace does not fool the slice', () => {
+  const source = [
+    "  @Get('overview') overview() { return this.service.overview(); }",
+    '',
+    'function score(line: string): number {',
+    '  if (/[{:=]\s*$/.test(line)) return 2;',
+    '  return 0;',
+    '}',
+    'const after = 1;'
+  ].join('\n');
+
+  assert.equal(extractSymbol(source, 'overview')!.startLine, 1);
+  const fn = extractSymbol(source, 'score')!;
+  assert.equal(fn.endLine, 6, 'the "{" inside the regex is not an opening brace');
+});
+
+test('without semicolons a type ends where the next declaration begins', () => {
+  const source = [
+    'type First<T> = T extends [infer A, ...any[]] ? A : never',
+    'type Second<T> = T extends [any, infer B] ? B : never',
+    '',
+    'export type State =',
+    "  | { status: 'valid' }",
+    "  | { status: 'expired' }",
+    '',
+    'const x = 1'
+  ].join('\n');
+
+  assert.equal(extractSymbol(source, 'First')!.endLine, 1);
+  assert.equal(extractSymbol(source, 'State')!.endLine, 6, 'each union arm closes a brace, the type goes on');
+});
+
+test('a multi-line string is part of the body, blank lines and all', () => {
+  const csharp = [
+    'public static string Prompt(string alvo) => $"""',
+    '    Traduza tudo para {alvo},',
+    '',
+    '    sem pular nada.',
+    '    """;',
+    'public static int Depois = 1;'
+  ].join('\n');
+  assert.equal(extractSymbol(csharp, 'Prompt')!.endLine, 5);
+
+  const python = [
+    'def criar_ass(linha):',
+    '    cabecalho = r"""[Script Info]',
+    'ScriptType: v4.00+',
+    '"""',
+    '    return cabecalho + linha',
+    '',
+    'def depois():',
+    '    pass'
+  ].join('\n');
+  assert.equal(extractSymbol(python, 'criar_ass')!.endLine, 5);
 });
