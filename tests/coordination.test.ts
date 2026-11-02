@@ -219,6 +219,6 @@ test('a task shows its whole story: claim, rejection, the redo and the verdicts'
     assert.match(reviews[0].result!, /esqueceu o negativo/);
     const said = events.map(e => e.description).join('\n');
     assert.match(said, /claimed .*formatar moeda/);
-    assert.match(said, /revisao rejeitou|rejected/i);
+    assert.match(said, /review rejected/i);
   });
 });

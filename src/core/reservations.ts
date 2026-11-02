@@ -4,7 +4,7 @@
  */
 import path from 'node:path';
 import { FileReservation } from '../models/types.js';
-import { atomicWriteJson, readJson, withFileLock } from '../utils/fs.js';
+import { atomicWriteJson, readJsonIfExists, withFileLock } from '../utils/fs.js';
 import { createId } from '../utils/ids.js';
 import { resolvePaths } from './paths.js';
 
@@ -93,8 +93,8 @@ export class ReservationStore {
 
   private async load(): Promise<FileReservation[]> {
     try {
-      const data = await readJson<{ reservations?: FileReservation[] }>(this.file);
-      return Array.isArray(data.reservations) ? data.reservations : [];
+      const data = await readJsonIfExists<{ reservations?: FileReservation[] }>(this.file);
+      return Array.isArray(data?.reservations) ? data.reservations : [];
     } catch {
       return [];
     }

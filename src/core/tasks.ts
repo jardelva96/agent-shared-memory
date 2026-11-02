@@ -1,7 +1,7 @@
-import { readdir, rm } from 'node:fs/promises';
+import { readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { AgentTask, TaskSchedule, TaskStatus } from '../models/types.js';
-import { atomicWriteJson, ensureDir, readJson, withFileLock } from '../utils/fs.js';
+import { atomicWriteJson, ensureDir, readJson, readJsonIfExists, withFileLock } from '../utils/fs.js';
 import { nowIso } from '../utils/time.js';
 import { nextOccurrence, parseCron } from './cron.js';
 import { resolvePaths } from './paths.js';
@@ -9,6 +9,18 @@ import { resolvePaths } from './paths.js';
 const ACTIVE: TaskStatus[] = ['OPEN', 'CLAIMED'];
 /** A verdict has been given; nothing may overwrite it. */
 const TERMINAL: TaskStatus[] = ['DONE', 'FAILED', 'CANCELLED'];
+
+/** Closed tasks kept in the queue folder; past this, the oldest move to tasks/archive/. */
+export const DEFAULT_MAX_CLOSED_TASKS = 200;
+
+/** Files read at once when listing a folder of tasks. */
+const READ_BATCH = 64;
+
+/** A review, its work and its other votes are not archived until this long after the last change. */
+const ARCHIVE_GRACE_MS = 10 * 60_000;
+
+/** Moved per claim at most, so the queue lock is never held for long. */
+const ARCHIVE_BATCH = 1000;
 
 /** `closed` is false when the task was already terminal and this call changed nothing. */
 export interface FinishResult {
@@ -19,6 +31,8 @@ export interface FinishResult {
 export interface TaskFilter {
   status?: TaskStatus[];
   agent?: string;
+  /** Also read archived tasks. Implied when `status` asks for a closed status. */
+  archived?: boolean;
 }
 
 /** The durable work queue. */
@@ -33,30 +47,25 @@ export class TaskStore {
     return path.join(this.paths.tasksDir, `${assertTaskId(id)}.json`);
   }
 
+  private archiveFile(id: string): string {
+    return path.join(this.paths.tasksArchiveDir, `${assertTaskId(id)}.json`);
+  }
+
   async write(task: AgentTask): Promise<void> {
     await atomicWriteJson(this.file(task.id), task);
   }
 
   async read(id: string): Promise<AgentTask> {
-    return readJson<AgentTask>(this.file(id));
+    const task = (await readJsonIfExists<AgentTask>(this.file(id))) ?? (await readJsonIfExists<AgentTask>(this.archiveFile(id)));
+    if (!task) throw Object.assign(new Error(`No task ${id}.`), { code: 'ENOENT' });
+    return task;
   }
 
   async list(filter: TaskFilter = {}): Promise<AgentTask[]> {
-    const dir = this.paths.tasksDir;
-    let files: string[];
-    try {
-      files = (await readdir(dir)).filter(f => f.endsWith('.json'));
-    } catch {
-      return [];
-    }
-
-    const tasks: AgentTask[] = [];
-    for (const file of files) {
-      try {
-        tasks.push(await readJson<AgentTask>(path.join(dir, file)));
-      } catch {
-        // Skip a task being written right now rather than failing the whole listing.
-      }
+    const tasks = await readTasks(this.paths.tasksDir);
+    if (filter.archived || filter.status?.some(status => TERMINAL.includes(status))) {
+      const live = new Set(tasks.map(task => task.id));
+      for (const task of await readTasks(this.paths.tasksArchiveDir)) if (!live.has(task.id)) tasks.push(task);
     }
 
     return tasks
@@ -66,7 +75,12 @@ export class TaskStore {
   }
 
   /** Atomically hands the oldest eligible task to one agent. */
-  async claim(agentId: string, claimSeconds: number, maxAttempts = 0): Promise<AgentTask | undefined> {
+  async claim(
+    agentId: string,
+    claimSeconds: number,
+    maxAttempts = 0,
+    maxClosed = DEFAULT_MAX_CLOSED_TASKS
+  ): Promise<AgentTask | undefined> {
     const p = this.paths;
     await ensureDir(p.tasksDir);
 
@@ -81,8 +95,8 @@ export class TaskStore {
         if (maxAttempts > 0 && task.attempts >= maxAttempts) {
           task.status = 'FAILED';
           task.result =
-            `abandonada apos ${task.attempts} tentativa(s): o claim expirou sem conclusao todas as vezes. ` +
-            'Provavel tarefa venenosa: revise antes de reenfileirar.';
+            `abandoned after ${task.attempts} attempt(s): every claim expired without a result. ` +
+            'Probably a poison task; review it before requeueing.';
           task.finishedAt = now;
           task.claimedBy = undefined;
           task.claimExpiresAt = undefined;
@@ -100,18 +114,73 @@ export class TaskStore {
       }
 
       // Blocked tasks are not handed out.
-      const candidate = readyFor(tasks, agentId)[0];
-      if (!candidate) return undefined;
+      const candidate = readyFor(tasks, agentId, await this.archivedDone(tasks))[0];
+      if (candidate) {
+        candidate.status = 'CLAIMED';
+        candidate.claimedBy = agentId;
+        candidate.claimedAt = now;
+        candidate.claimExpiresAt = new Date(Date.now() + claimSeconds * 1000).toISOString();
+        candidate.attempts += 1;
+        candidate.updatedAt = now;
+        await this.write(candidate);
+      }
 
-      candidate.status = 'CLAIMED';
-      candidate.claimedBy = agentId;
-      candidate.claimedAt = now;
-      candidate.claimExpiresAt = new Date(Date.now() + claimSeconds * 1000).toISOString();
-      candidate.attempts += 1;
-      candidate.updatedAt = now;
-      await this.write(candidate);
+      // Housekeeping only: a failed move leaves the task where it was.
+      await this.archiveClosed(tasks, maxClosed).catch(() => 0);
       return candidate;
     });
+  }
+
+  /** Ids that open tasks depend on and that were archived as DONE. */
+  async archivedDone(tasks: AgentTask[]): Promise<Set<string>> {
+    const live = new Set(tasks.map(task => task.id));
+    const missing = new Set(
+      tasks.filter(task => task.status === 'OPEN').flatMap(dependenciesOf).filter(id => !live.has(id))
+    );
+    const done = new Set<string>();
+    await Promise.all(
+      [...missing].map(async id => {
+        const task = await readJsonIfExists<AgentTask>(this.archiveFile(id)).catch(() => undefined);
+        if (task?.status === 'DONE') done.add(id);
+      })
+    );
+    return done;
+  }
+
+  /**
+   * Moves the oldest closed tasks to tasks/archive/ once more than `maxClosed` sit in the queue
+   * folder, keeping the newest half. A task that open work still points at stays, and so does a
+   * vote of a review panel that is still open. Returns how many moved.
+   */
+  async archiveClosed(tasks: AgentTask[], maxClosed: number): Promise<number> {
+    const closed = tasks.filter(task => TERMINAL.includes(task.status));
+    if (maxClosed <= 0 || closed.length <= maxClosed) return 0;
+
+    const open = tasks.filter(task => !TERMINAL.includes(task.status));
+    const pinned = new Set(open.flatMap(task => [...dependenciesOf(task), task.reviewOf, task.parentTaskId]));
+    const byId = new Map(tasks.map(task => [task.id, task]));
+    // A panel's last vote is written before the votes are counted; in between, the earlier votes
+    // are pinned by nothing. Work under review and its votes stay while any of them is recent.
+    const since = new Date(Date.now() - ARCHIVE_GRACE_MS).toISOString();
+    const recentReviews = new Set(
+      tasks.filter(task => (task.reviewOf || task.reviewTaskId) && task.updatedAt > since).map(task => task.reviewOf ?? task.id)
+    );
+    const movable = closed
+      .filter(task => !pinned.has(task.id))
+      .filter(task => !recentReviews.has(task.reviewOf ?? task.id))
+      .filter(task => !task.reviewOf || !pinned.has(task.reviewOf))
+      .filter(task => !task.reviewOf || TERMINAL.includes(byId.get(task.reviewOf)?.status ?? 'DONE'))
+      .sort((a, b) => (a.finishedAt ?? a.updatedAt).localeCompare(b.finishedAt ?? b.updatedAt));
+
+    const count = Math.min(movable.length, closed.length - Math.floor(maxClosed / 2), ARCHIVE_BATCH);
+    if (count <= 0) return 0;
+    await ensureDir(this.paths.tasksArchiveDir);
+    let moved = 0;
+    for (const task of movable.slice(0, count)) {
+      // A rename: the task is in one folder or the other, never neither.
+      if (await rename(this.file(task.id), this.archiveFile(task.id)).then(() => true, () => false)) moved++;
+    }
+    return moved;
   }
 
   /** Closes a task. */
@@ -159,6 +228,7 @@ export class TaskStore {
 
   async remove(id: string): Promise<void> {
     await rm(this.file(id), { force: true });
+    await rm(this.archiveFile(id), { force: true });
   }
 
   async countActive(): Promise<number> {
@@ -235,10 +305,10 @@ function cannotJudge(
 
 /**
  * The tasks `agentId` could claim right now, in the order the queue hands them out: most urgent
- * first (priority 0 before 4), then oldest.
+ * first (priority 0 before 4), then oldest. `doneElsewhere` holds archived DONE dependencies.
  */
-export function readyFor(tasks: AgentTask[], agentId?: string): AgentTask[] {
-  const done = new Set(tasks.filter(task => task.status === 'DONE').map(task => task.id));
+export function readyFor(tasks: AgentTask[], agentId?: string, doneElsewhere: Set<string> = new Set()): AgentTask[] {
+  const done = new Set([...doneElsewhere, ...tasks.filter(task => task.status === 'DONE').map(task => task.id)]);
   const byId = new Map(tasks.map(task => [task.id, task]));
   return tasks
     .filter(
@@ -255,6 +325,24 @@ export function readyFor(tasks: AgentTask[], agentId?: string): AgentTask[] {
 export function dependenciesOf(task: AgentTask): string[] {
   if (!task.dependsOn) return [];
   return Array.isArray(task.dependsOn) ? task.dependsOn : [task.dependsOn];
+}
+
+/** Every task in a folder, read in parallel batches; a file that vanished or is torn is skipped. */
+async function readTasks(dir: string): Promise<AgentTask[]> {
+  let files: string[];
+  try {
+    files = (await readdir(dir)).filter(f => f.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const tasks: AgentTask[] = [];
+  for (let i = 0; i < files.length; i += READ_BATCH) {
+    const batch = await Promise.all(
+      files.slice(i, i + READ_BATCH).map(file => readJsonIfExists<AgentTask>(path.join(dir, file)).catch(() => undefined))
+    );
+    for (const task of batch) if (task) tasks.push(task);
+  }
+  return tasks;
 }
 
 /** Ids reach the filesystem as file names, so they are validated like agent ids. */

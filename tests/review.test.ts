@@ -77,7 +77,7 @@ test('a rejected review sends the work back with the reason attached', async () 
     const reopened = await service.tasks.read(work.id);
     assert.equal(reopened.status, 'OPEN', 'done is no longer self-declared');
     assert.equal(reopened.claimedBy, undefined);
-    assert.match(reopened.result ?? '', /revisao rejeitou/);
+    assert.match(reopened.result ?? '', /review rejected/);
     assert.match(reopened.detail ?? '', /syncDir nao existe/, 'the next attempt starts from the objection');
 
     // And it can be picked up again.
@@ -272,7 +272,7 @@ test('endless rejection stops at the limit instead of billing forever', async ()
     const settled = await service.tasks.read(work.id);
     assert.equal(settled.status, 'FAILED', 'it stops rather than looping');
     assert.equal(settled.reviewRounds, 3);
-    assert.match(settled.result!, /decisao humana/);
+    assert.match(settled.result!, /human decision/);
     assert.equal(await service.claimTask('DEV'), undefined, 'and nobody picks it up again');
   });
 });
@@ -324,8 +324,8 @@ test('a reviewer that keeps dying eventually stops instead of requeueing forever
     assert.equal(await service.claimTask('QA'), undefined, 'it stops asking');
     const dead = await service.tasks.read(review.id);
     assert.equal(dead.status, 'FAILED');
-    assert.match(dead.result!, /sem dar veredito/);
-    assert.match(dead.result!, /decisao humana/);
+    assert.match(dead.result!, /without a verdict/);
+    assert.match(dead.result!, /human decision/);
   });
 });
 

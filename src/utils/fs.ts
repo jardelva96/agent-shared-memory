@@ -33,15 +33,28 @@ export async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(content) as T;
 }
 
+/**
+ * For files that may never have been written (reservations, facts, a read cursor): a missing
+ * file is `undefined` at once. Waiting for it to reappear cost every write 150 ms.
+ */
+export async function readJsonIfExists<T>(file: string): Promise<T | undefined> {
+  try {
+    return JSON.parse(await readWithRetry(file, 5000, 0)) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 /** The reader half of the race `renameWithRetry` handles for writers. */
-export async function readWithRetry(file: string, timeoutMs = 5000): Promise<string> {
+export async function readWithRetry(file: string, timeoutMs = 5000, missingMs = MISSING_RETRY_MS): Promise<string> {
   const start = Date.now();
   while (true) {
     try {
       return await readFile(file, 'utf8');
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? '';
-      const budget = code === 'ENOENT' ? Math.min(MISSING_RETRY_MS, timeoutMs) : timeoutMs;
+      const budget = code === 'ENOENT' ? Math.min(missingMs, timeoutMs) : timeoutMs;
       if (!CONTENDED.has(code) && code !== 'ENOENT') throw error;
       if (Date.now() - start >= budget) throw error;
       await sleep(backoff());
@@ -82,6 +95,35 @@ export async function atomicWriteJson(file: string, value: unknown): Promise<voi
  */
 const LOCK_WAIT_MS = 15_000;
 
+/**
+ * Runs `fn` under the lock only if it is free right now. `acquired` is false when another process
+ * holds it, so a caller with nothing to wait for can leave the work to that process instead.
+ */
+export async function tryFileLock<T>(
+  lockFile: string,
+  fn: () => Promise<T>
+): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  await ensureDir(path.dirname(lockFile));
+  const nonce = `${process.pid}.${Date.now()}.${randomSuffix()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(lockFile, 'wx');
+      await handle.writeFile(nonce, 'utf8');
+    } catch (error) {
+      if (!CONTENDED.has((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      if (attempt === 0 && (await reclaimIfStale(lockFile))) continue;
+      return { acquired: false };
+    }
+    try {
+      return { acquired: true, value: await fn() };
+    } finally {
+      await release(handle, lockFile, nonce);
+    }
+  }
+  return { acquired: false };
+}
+
 export async function withFileLock<T>(
   lockFile: string,
   fn: () => Promise<T>,
@@ -90,6 +132,7 @@ export async function withFileLock<T>(
   const start = Date.now();
   await ensureDir(path.dirname(lockFile));
   let lastCode = 'EEXIST';
+  let waits = 0;
 
   // Written into the lock and checked before releasing or reclaiming it.
   const nonce = `${process.pid}.${Date.now()}.${randomSuffix()}`;
@@ -105,7 +148,7 @@ export async function withFileLock<T>(
       lastCode = code;
       if (await reclaimIfStale(lockFile)) continue;
       if (Date.now() - start >= timeoutMs) throw new LockTimeoutError(lockFile, lastCode);
-      await sleep(backoff());
+      await sleep(lockBackoff(waits++));
       continue;
     }
 
@@ -218,6 +261,15 @@ export async function cleanStaleTemps(dir: string): Promise<number> {
 /** Jittered so a burst of agents does not retry in lockstep. */
 function backoff(): number {
   return 15 + Math.floor(Math.random() * 35);
+}
+
+/**
+ * Most locks here guard one append that takes about a millisecond, so the first retries come
+ * quickly and the wait doubles from there, up to about 50 ms, jittered like backoff().
+ */
+function lockBackoff(attempt: number): number {
+  const base = Math.min(50, 2 ** attempt);
+  return base / 2 + Math.random() * base;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -183,4 +183,6 @@ export interface ProjectConfig {
    * requeued.
    */
   maxReviewRounds: number;
+  /** Closed tasks kept in the queue folder before the oldest are archived. 0 keeps them all. */
+  maxClosedTasks?: number;
 }

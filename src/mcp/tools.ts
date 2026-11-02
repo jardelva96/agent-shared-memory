@@ -436,7 +436,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'memory_remember',
     description:
-      'Store a fact about the project that every agent should start with ("tests need Postgres on 5477"). Keep it short and ' +
+      'Store a fact about the project that every agent should start with ("tests need Postgres running"). Keep it short and ' +
       'lasting; per-task notes belong in memory_record.',
     inputSchema: {
       type: 'object',

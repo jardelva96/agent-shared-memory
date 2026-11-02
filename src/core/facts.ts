@@ -1,7 +1,7 @@
 /** Project facts every session starts with, e.g. "tests need Postgres". */
 import path from 'node:path';
 import { ProjectFact } from '../models/types.js';
-import { atomicWriteJson, readJson, withFileLock } from '../utils/fs.js';
+import { atomicWriteJson, readJsonIfExists, withFileLock } from '../utils/fs.js';
 import { createId } from '../utils/ids.js';
 import { nowIso } from '../utils/time.js';
 import { resolvePaths } from './paths.js';
@@ -21,8 +21,8 @@ export class FactStore {
 
   async list(): Promise<ProjectFact[]> {
     try {
-      const data = await readJson<{ facts?: ProjectFact[] }>(this.file);
-      return Array.isArray(data.facts) ? data.facts : [];
+      const data = await readJsonIfExists<{ facts?: ProjectFact[] }>(this.file);
+      return Array.isArray(data?.facts) ? data.facts : [];
     } catch {
       return [];
     }

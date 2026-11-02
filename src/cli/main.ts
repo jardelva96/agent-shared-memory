@@ -5,16 +5,11 @@ import { parsePointer, formatPointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { ActivityType, AgentTask, TaskStatus } from '../models/types.js';
 import { parseArgs, stringFlag, numberFlag, boolFlag } from './args.js';
-import { startDashboard } from '../web/server.js';
-import { startMcpServer } from '../mcp/server.js';
 import { describeChange } from '../git/repo.js';
-import { assertGitRepo, baselineOf, ObservedChange, runWatchPass } from '../git/watcher.js';
-import { runQueue } from '../core/runner.js';
+import type { ObservedChange } from '../git/watcher.js';
 import { readFile } from 'node:fs/promises';
-import { findReferences, findSymbol, outlineSymbols, renameSymbol } from '../core/symbols.js';
 import { localTime } from '../utils/time.js';
 import { runClaudeHook, runGitPreCommit, setupClaude, setupGit } from './hooks.js';
-import { startHub } from '../remote/hub.js';
 import { remoteService } from '../remote/client.js';
 
 async function main(): Promise<void> {
@@ -288,7 +283,8 @@ async function main(): Promise<void> {
         const statusFlag = stringFlag(parsed.flags, 'status');
         const tasks = await service.tasks.list({
           status: statusFlag ? (statusFlag.toUpperCase().split(',') as TaskStatus[]) : undefined,
-          agent: stringFlag(parsed.flags, 'agent')
+          agent: stringFlag(parsed.flags, 'agent'),
+          archived: parsed.flags.all === true
         });
         if (parsed.flags.json) {
           console.log(JSON.stringify(tasks, null, 2));
@@ -371,6 +367,8 @@ async function main(): Promise<void> {
         onEvent: (line: string) => console.log(line)
       };
 
+      // Loaded per command: a hook runs on every edit and should not pay for the others.
+      const { runQueue } = await import('../core/runner.js');
       if (once) {
         const outcomes = await runQueue(service, options);
         console.log(`${outcomes.length} task(s) executed.`);
@@ -416,6 +414,7 @@ async function main(): Promise<void> {
     }
 
     case 'watch': {
+      const { assertGitRepo, baselineOf, runWatchPass } = await import('../git/watcher.js');
       await assertGitRepo(root);
       const watcherId = stringFlag(parsed.flags, 'id');
       const record = !boolFlag(parsed.flags, 'dry-run');
@@ -464,6 +463,7 @@ async function main(): Promise<void> {
     }
 
     case 'hub': {
+      const { startHub } = await import('../remote/hub.js');
       const hub = await startHub(service, {
         port: numberFlag(parsed.flags, 'port') ?? 4318,
         host: stringFlag(parsed.flags, 'host') ?? '127.0.0.1',
@@ -479,12 +479,14 @@ async function main(): Promise<void> {
 
     case 'mcp': {
       // stdout belongs to the JSON-RPC transport from here on; never log to it.
+      const { startMcpServer } = await import('../mcp/server.js');
       await startMcpServer(service, { agentId: stringFlag(parsed.flags, 'agent') });
       break;
     }
 
     case 'serve': {
       const port = numberFlag(parsed.flags, 'port') ?? 4317;
+      const { startDashboard } = await import('../web/server.js');
       await startDashboard(service, port);
       console.log(`Dashboard: http://127.0.0.1:${port}`);
       console.log('Press Ctrl+C to stop.');
@@ -584,6 +586,7 @@ async function main(): Promise<void> {
 
     case 'symbols': {
       const file = required(parsed.positionals[0], 'a file');
+      const { outlineSymbols } = await import('../core/symbols.js');
       const entries = outlineSymbols(await readFile(path.resolve(root, file), 'utf8'), file);
       if (parsed.flags.json) console.log(JSON.stringify(entries, null, 2));
       else for (const e of entries) console.log(`${String(e.declarationLine).padStart(5)}-${String(e.endLine).padEnd(5)} ${e.kind.padEnd(10)} ${e.container ? `${e.container}.` : ''}${e.name}`);
@@ -591,6 +594,7 @@ async function main(): Promise<void> {
     }
 
     case 'find': {
+      const { findSymbol } = await import('../core/symbols.js');
       const matches = await findSymbol(root, required(parsed.positionals[0], 'a symbol name'));
       if (parsed.flags.json) console.log(JSON.stringify(matches, null, 2));
       else if (matches.length === 0) console.log('Not found.');
@@ -599,6 +603,7 @@ async function main(): Promise<void> {
     }
 
     case 'refs': {
+      const { findReferences } = await import('../core/symbols.js');
       const refs = await findReferences(root, required(parsed.positionals[0], 'a symbol name'));
       if (parsed.flags.json) console.log(JSON.stringify(refs, null, 2));
       else if (refs.length === 0) console.log('No uses found.');
@@ -607,6 +612,7 @@ async function main(): Promise<void> {
     }
 
     case 'rename': {
+      const { renameSymbol } = await import('../core/symbols.js');
       const plan = await renameSymbol(root, required(parsed.positionals[0], 'the symbol'), required(parsed.positionals[1], 'the new name'), {
         apply: parsed.flags.apply === true
       });
@@ -719,7 +725,7 @@ function printHelp(): void {
   console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000] [--max-depth 3]\n  compact [--keep 500] [--history] [--dry-run]\n\nWork queue:\n  task create --agent A --title "..." [--detail "..."] [--for B] [--pointer "..."]\n                [--review-by C]        queue a review that must accept the work
                 [--review]             same, but open to whoever is free (never the doer)
                 [--reviewers 3]        queue an open panel (1-9); majority decides\n                [--depends-on T1,T2]   stay out of the queue until all of them are DONE
-                [--priority 0-4]       0 is handed out first; reviews inherit it\n                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--json]\n  task ready [--agent A] [--json]   what can be claimed now, most urgent first\n  task show <id> [--json]           the task, its reviews and every event that names it\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\nFiles:\n  reserve --agent A <path|folder/|glob>... [--shared] [--ttl 30] [--reason "..."]\n                           all or nothing; other agents are refused while it holds\n  release --agent A [path...]      without paths, everything the agent holds\n  reservations [--json]\n\nCode by symbol:\n  symbols <file> [--json]          what a file declares, with line ranges\n  find <Name|Type.member> [--json] where a symbol is declared in the project\n  refs <Name> [--json]             where it is used\n  rename <Name> <NewName> [--apply] shows every line first; --apply writes it\n\nProject memory:\n  remember "fact" [--agent A]      a fact every session starts with\n  facts [--json]  |  forget <id>\n  prime [--agent A]                the start-of-session briefing\n\nEditors and git:\n  setup claude [--remove]          Claude Code hooks + MCP server for this project\n  setup git [--remove]             pre-commit guard for reserved files\n  hook claude <session-start|pre-write|post-write|session-end>   (run by the hooks)\n  hook pre-commit                                                 (run by git)\n\nSeveral machines:\n  hub [--port 4318] [--host 0.0.0.0] [--token T]   share this memory over the network\n  --remote URL --token T   (or AGENT_MEMORY_REMOTE, AGENT_MEMORY_TOKEN) use a hub from any command\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
+                [--priority 0-4]       0 is handed out first; reviews inherit it\n                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--all] [--json]   --all includes archived tasks\n  task ready [--agent A] [--json]   what can be claimed now, most urgent first\n  task show <id> [--json]           the task, its reviews and every event that names it\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\nFiles:\n  reserve --agent A <path|folder/|glob>... [--shared] [--ttl 30] [--reason "..."]\n                           all or nothing; other agents are refused while it holds\n  release --agent A [path...]      without paths, everything the agent holds\n  reservations [--json]\n\nCode by symbol:\n  symbols <file> [--json]          what a file declares, with line ranges\n  find <Name|Type.member> [--json] where a symbol is declared in the project\n  refs <Name> [--json]             where it is used\n  rename <Name> <NewName> [--apply] shows every line first; --apply writes it\n\nProject memory:\n  remember "fact" [--agent A]      a fact every session starts with\n  facts [--json]  |  forget <id>\n  prime [--agent A]                the start-of-session briefing\n\nEditors and git:\n  setup claude [--remove]          Claude Code hooks + MCP server for this project\n  setup git [--remove]             pre-commit guard for reserved files\n  hook claude <session-start|pre-write|post-write|session-end>   (run by the hooks)\n  hook pre-commit                                                 (run by git)\n\nSeveral machines:\n  hub [--port 4318] [--host 0.0.0.0] [--token T]   share this memory over the network\n  --remote URL --token T   (or AGENT_MEMORY_REMOTE, AGENT_MEMORY_TOKEN) use a hub from any command\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
 }
 
 main().catch(error => {

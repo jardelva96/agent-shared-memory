@@ -36,7 +36,7 @@ test('a poisonous task is dead-lettered instead of returning to the queue foreve
 
     const stored = await service.tasks.read(task.id);
     assert.equal(stored.status, 'FAILED');
-    assert.match(stored.result ?? '', /abandonada apos 2 tentativa/);
+    assert.match(stored.result ?? '', /abandoned after 2 attempt/);
   });
 });
 

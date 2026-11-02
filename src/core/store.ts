@@ -1,8 +1,9 @@
-import { appendFile, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { appendFile, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AgentActivity, AgentState, ProjectConfig } from '../models/types.js';
 import { assertAgentId } from '../utils/ids.js';
-import { atomicWrite, atomicWriteJson, ensureDir, isLockTimeout, readJson, withFileLock } from '../utils/fs.js';
+import { atomicWrite, atomicWriteJson, ensureDir, isLockTimeout, readJson, readJsonIfExists, tryFileLock, withFileLock } from '../utils/fs.js';
+import { readConfig } from './config.js';
 import { resolvePaths } from './paths.js';
 import { FactStore } from './facts.js';
 import { renderActivity, renderAgentHeader, renderSessionBanner, renderSharedMemory } from './render.js';
@@ -56,15 +57,11 @@ export class MemoryStore {
     const p = this.paths;
     await ensureDir(p.stateDir);
     const files = (await readdir(p.stateDir)).filter(f => f.endsWith('.json'));
-    const states: AgentState[] = [];
-    for (const file of files) {
-      try {
-        states.push(await readJson<AgentState>(path.join(p.stateDir, file)));
-      } catch {
-        // Ignore a transient/corrupt state file rather than breaking all agents.
-      }
-    }
-    return states;
+    // In parallel; a state removed meanwhile (unregister) or torn is skipped, not waited for.
+    const states = await Promise.all(
+      files.map(file => readJsonIfExists<AgentState>(path.join(p.stateDir, file)).catch(() => undefined))
+    );
+    return states.filter((state): state is AgentState => state !== undefined);
   }
 
   async deleteState(agentId: string): Promise<void> {
@@ -178,30 +175,59 @@ export class MemoryStore {
   }
 
   /** Regenerates the central panel. */
-  async refreshSharedMemory(config: ProjectConfig): Promise<number | undefined> {
-    const p = this.paths;
-    try {
-      return await withFileLock(path.join(p.locksDir, 'shared-memory.lock'), async () => {
-        const [states, lines, reservations, facts] = await Promise.all([
-          this.listStates(),
-          this.journalLines(),
-          new ReservationStore(p.root).active(),
-          new FactStore(p.root).list()
-        ]);
-        await atomicWrite(
-          p.sharedMemoryFile,
-          renderSharedMemory(states, tail(lines, config.recentHistoryLimit), config, { reservations, facts })
-        );
-        // Return the size so the caller can decide to compact without reading the journal again.
-        return lines.length;
-      });
-    } catch (error) {
-      if (!isLockTimeout(error)) throw error;
-      return undefined;
+  async refreshSharedMemory(config: ProjectConfig, options: { wait?: boolean } = {}): Promise<number | undefined> {
+    const lock = path.join(this.paths.locksDir, 'shared-memory.lock');
+    // A writer that finds the panel busy leaves this mark and moves on; whoever holds the panel
+    // checks it after finishing and renders again. Without it every write queued for the panel.
+    const marked = await touch(this.panelMark);
+    const run = async () => {
+      await rm(this.panelMark, { force: true }).catch(() => undefined);
+      return this.renderPanel(config);
+    };
+
+    let size: number | undefined;
+    for (let round = 0; round < PANEL_ROUNDS; round++) {
+      if (round === 0 && (options.wait || !marked)) {
+        try {
+          size = await withFileLock(lock, run);
+        } catch (error) {
+          if (!isLockTimeout(error)) throw error;
+          return undefined;
+        }
+      } else {
+        const result = await tryFileLock(lock, run);
+        if (!result.acquired) return size;
+        size = result.value;
+      }
+      if (!(await present(this.panelMark))) return size;
     }
+    // Still marked after a few rounds of a busy burst: the next write or read renders it.
+    return size;
+  }
+
+  /** Writes SHARED_MEMORY.md and returns the journal size, so the caller can decide to compact. */
+  private async renderPanel(config: ProjectConfig): Promise<number> {
+    const p = this.paths;
+    const [states, lines, reservations, facts] = await Promise.all([
+      this.listStates(),
+      this.journalLines(),
+      new ReservationStore(p.root).active(),
+      new FactStore(p.root).list()
+    ]);
+    await atomicWrite(
+      p.sharedMemoryFile,
+      renderSharedMemory(states, tail(lines, config.recentHistoryLimit), config, { reservations, facts })
+    );
+    return lines.length;
+  }
+
+  private get panelMark(): string {
+    return path.join(this.paths.locksDir, 'shared-memory.dirty');
   }
 
   async readSharedMemory(): Promise<string> {
+    // A write left the panel behind during a burst: bring it up to date before anyone reads it.
+    if (await present(this.panelMark)) await this.refreshSharedMemory(await readConfig(this.root), { wait: true });
     return readFile(this.paths.sharedMemoryFile, 'utf8');
   }
 
@@ -212,6 +238,23 @@ export class MemoryStore {
   private historyFile(agentId: string): string {
     return path.join(this.paths.historyDir, `${assertAgentId(agentId)}.md`);
   }
+}
+
+/** Renders after a write at most this many times in a row before leaving the rest to the next one. */
+const PANEL_ROUNDS = 3;
+
+async function touch(file: string): Promise<boolean> {
+  try {
+    await ensureDir(path.dirname(file));
+    await writeFile(file, '');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function present(file: string): Promise<boolean> {
+  return stat(file).then(() => true, () => false);
 }
 
 /** Newest first, skipping any line torn by a partial write. */

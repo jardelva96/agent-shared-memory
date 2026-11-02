@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, open, readdir, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { AgentMemoryService } from '../src/core/service.js';
 
@@ -120,6 +121,32 @@ test('a contended panel lock never fails the write it follows', async () => {
     await service.activity({ agentId: 'AGENT-01', type: 'NOTE', description: 'painel liberado' });
     const memory = await service.store.readSharedMemory();
     assert.match(memory, /painel liberado/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a write that finds the panel busy does not wait for it, and the next read still sees it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-panel-'));
+  try {
+    const service = new AgentMemoryService(root);
+    await service.init('Busy Panel');
+    await service.register('AGENT-01');
+
+    const lockFile = path.join(root, '.agents', '.locks', 'shared-memory.lock');
+    const held = await open(lockFile, 'w');
+    const start = performance.now();
+    try {
+      await service.activity({ agentId: 'AGENT-01', type: 'NOTE', description: 'gravou com o painel ocupado' });
+    } finally {
+      await held.close();
+      await rm(lockFile, { force: true });
+    }
+    const elapsed = performance.now() - start;
+    assert.ok(elapsed < 1000, `the write queued for the panel for ${Math.round(elapsed)} ms`);
+
+    // No other write follows: the read itself brings the panel up to date.
+    assert.match(await service.store.readSharedMemory(), /gravou com o painel ocupado/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

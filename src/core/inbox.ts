@@ -1,7 +1,7 @@
 import { appendFile, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AgentMessage } from '../models/types.js';
-import { atomicWrite, atomicWriteJson, ensureDir, readJson, withFileLock } from '../utils/fs.js';
+import { atomicWrite, atomicWriteJson, ensureDir, readJsonIfExists, withFileLock } from '../utils/fs.js';
 import { assertAgentId } from '../utils/ids.js';
 import { resolvePaths } from './paths.js';
 
@@ -103,7 +103,7 @@ export class InboxStore {
   async cursor(agentId: string): Promise<Cursor> {
     const file = this.cursorFile(agentId);
     try {
-      return await readJson<Cursor>(file);
+      return (await readJsonIfExists<Cursor>(file)) ?? {};
     } catch {
       return {};
     }

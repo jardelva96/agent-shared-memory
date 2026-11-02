@@ -27,6 +27,9 @@ header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
 input[type=search]{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 12px;font-size:13px;min-width:260px}
 input[type=search]:focus{outline:none;border-color:var(--info)}
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.table-wrap{overflow-x:auto;border-radius:10px}
+.table-wrap table{min-width:760px}
+@media (max-width:640px){main{padding:16px 16px 48px}input[type=search]{min-width:0;width:100%}}
 th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;font-size:13px}
 th{background:var(--panel-2);color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
 tr:last-child td{border-bottom:none}
@@ -85,12 +88,12 @@ code{color:var(--link);font-size:12px;word-break:break-word}
   <input type="search" id="filter" placeholder="Filter by agent, demand, file or symbol" autocomplete="off" />
   <span class="hint" id="filter-hint"></span>
 </div>
-<table>
+<div class="table-wrap"><table>
   <thead><tr>
     <th>Agent</th><th>Status</th><th>Demand</th><th>Now</th><th>Pointer</th><th>Waiting</th><th>Updated</th>
   </tr></thead>
   <tbody id="agents"><tr><td colspan="7" class="empty">Waiting for data...</td></tr></tbody>
-</table>
+</table></div>
 
 <h2>Work queue</h2>
 <ul class="feed" id="queue"><li class="empty">Waiting for data...</li></ul>

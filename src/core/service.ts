@@ -12,6 +12,7 @@ import { InboxStore } from './inbox.js';
 import { formatPointer, pointerKey } from './pointer.js';
 import { effectiveStatus } from './render.js';
 import { ReservationStore, ReserveOptions, ReserveResult } from './reservations.js';
+import { ReviewDesk } from './reviews.js';
 import { MemoryStore } from './store.js';
 
 export interface ActivityInput {
@@ -111,6 +112,7 @@ export class AgentMemoryService {
   readonly schedules: ScheduleStore;
   readonly reservations: ReservationStore;
   readonly facts: FactStore;
+  private readonly reviews: ReviewDesk;
 
   constructor(public readonly root = process.cwd()) {
     this.store = new MemoryStore(root);
@@ -119,6 +121,13 @@ export class AgentMemoryService {
     this.schedules = new ScheduleStore(root);
     this.reservations = new ReservationStore(root);
     this.facts = new FactStore(root);
+    this.reviews = new ReviewDesk({
+      tasks: this.tasks,
+      config: () => this.config(),
+      createTask: input => this.createTask(input),
+      note: (agentId, description, pointer) =>
+        this.store.appendActivity(this.makeActivity({ agentId, type: 'TASK', description, pointer }), { history: false })
+    });
   }
 
   async init(projectName?: string, overrides: Partial<ProjectConfig> = {}): Promise<ProjectConfig> {
@@ -283,7 +292,8 @@ export class AgentMemoryService {
 
   /** What `agentId` could claim right now, most urgent first; without an agent, all unblocked work. */
   async readyTasks(agentId?: string): Promise<AgentTask[]> {
-    return readyFor(await this.tasks.list(), agentId);
+    const tasks = await this.tasks.list();
+    return readyFor(tasks, agentId, await this.tasks.archivedDone(tasks));
   }
 
   /**
@@ -292,7 +302,7 @@ export class AgentMemoryService {
    */
   async taskHistory(id: string): Promise<{ task: AgentTask; reviews: AgentTask[]; events: AgentActivity[] }> {
     const task = await this.tasks.read(id);
-    const all = await this.tasks.list();
+    const all = await this.tasks.list({ archived: true });
     const reviews = all.filter(t => t.reviewOf === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const ids = new Set([id, ...reviews.map(r => r.id)]);
     const events = (await this.store.recentActivities(100_000))
@@ -545,7 +555,7 @@ export class AgentMemoryService {
       // A panel of one is the ordinary case and stays a single task.
       const seats = panel || 1;
       task.reviewers = seats;
-      const reviews = await this.queueReviewPanel(task, 1, input.createdBy, input.reviewBy, seats);
+      const reviews = await this.reviews.queuePanel(task, 1, input.createdBy, input.reviewBy, seats);
       task.reviewTaskId = reviews[0].id;
       task.updatedAt = nowIso();
       await this.tasks.write(task);
@@ -579,7 +589,7 @@ export class AgentMemoryService {
   async claimTask(agentId: string): Promise<AgentTask | undefined> {
     await this.requireAgent(agentId);
     const config = await this.config();
-    const task = await this.tasks.claim(agentId, config.taskClaimSeconds, config.maxTaskAttempts);
+    const task = await this.tasks.claim(agentId, config.taskClaimSeconds, config.maxTaskAttempts, config.maxClosedTasks);
     if (!task) return undefined;
 
     await this.store.appendActivity(
@@ -610,14 +620,14 @@ export class AgentMemoryService {
     if (task.reviewOf) {
       // A failure from the exit code means the reviewer gave no verdict, so the review is retried.
       if (status !== 'DONE' && options.fromExitCode) {
-        await this.retryAbandonedReview(task, result);
+        await this.reviews.retryAbandoned(task, result);
       } else {
-        await this.settleReview(task, status, result);
+        await this.reviews.settle(task, status, result);
       }
     } else if (status !== 'DONE' && task.reviewTaskId) {
       // The work did not land, so its review has nothing to judge.
       await this.tasks
-        .finish(task.reviewTaskId, 'CANCELLED', `trabalho ${task.id} terminou como ${status}`)
+        .finish(task.reviewTaskId, 'CANCELLED', `work ${task.id} ended as ${status}`)
         .catch(() => undefined);
     }
 
@@ -645,210 +655,6 @@ export class AgentMemoryService {
 
     await this.afterWrite();
     return task;
-  }
-
-  /** Puts a review back in the queue when its agent died before judging. */
-  private async retryAbandonedReview(review: AgentTask, result?: string): Promise<void> {
-    const { maxTaskAttempts } = await this.config();
-    const now = nowIso();
-
-    // A reviewer that dies every time it runs would otherwise requeue forever.
-    if (maxTaskAttempts > 0 && review.attempts >= maxTaskAttempts) {
-      review.result =
-        `revisao abandonada apos ${review.attempts} tentativa(s): o agente terminou sem dar veredito. ` +
-        `Ultima saida: ${result ?? 'sem detalhe'}. O trabalho continua sem revisao: precisa de decisao humana.`;
-      review.updatedAt = now;
-      await this.tasks.write(review);
-      return;
-    }
-
-    review.status = 'OPEN';
-    review.claimedBy = undefined;
-    review.claimedAt = undefined;
-    review.claimExpiresAt = undefined;
-    review.finishedAt = undefined;
-    review.result = undefined;
-    review.updatedAt = now;
-    await this.tasks.write(review);
-
-    await this.store.appendActivity(
-      this.makeActivity({
-        agentId: review.claimedBy ?? review.createdBy,
-        type: 'TASK',
-        description: `revisao ${review.id} nao chegou a julgar (${result ?? 'sem detalhe'}); devolvida para a fila`,
-        pointer: review.pointer
-      }),
-      { history: false }
-    );
-  }
-
-  /** Queues the reviews for one round of judging on `work`. */
-  private async queueReviewPanel(
-    work: AgentTask,
-    round: number,
-    createdBy: string,
-    assignedTo: string | undefined,
-    panel: number,
-    objection?: string
-  ): Promise<AgentTask[]> {
-    const ordinal = round > 1 ? ` (rodada ${round})` : '';
-    const previous = objection
-      ? `A rodada anterior rejeitou: ${objection}. `
-      : '';
-
-    const reviews: AgentTask[] = [];
-    for (let seat = 1; seat <= panel; seat++) {
-      const seatLabel = panel > 1 ? ` [${seat}/${panel}]` : '';
-      reviews.push(
-        await this.createTask({
-          title: `Revisar${ordinal}${seatLabel}: ${work.title}`,
-          detail:
-            `Revise o trabalho da tarefa ${work.id}. ${previous}Verifique de fato (leia o codigo, ` +
-            'rode o que houver para rodar). Conclua a revisao como DONE se estiver correto, ou ' +
-            'FAILED com o motivo, o que devolve o trabalho para a fila.' +
-            (panel > 1
-              ? ` Voce e um de ${panel} revisores; o veredito e por maioria, entao julgue por conta propria.`
-              : ''),
-          createdBy,
-          // Left unassigned when the review is open: the queue hands it to whoever is free,
-          // and claim() keeps it away from the agent that did the work.
-          assignedTo,
-          pointer: work.pointer,
-          dependsOn: work.id,
-          reviewOf: work.id,
-          reviewRound: round,
-          priority: work.priority
-        })
-      );
-    }
-    return reviews;
-  }
-
-  /** Cancels the seats that have not voted once the outcome can no longer change. */
-  private async closeUndecided(panel: AgentTask[], why: string): Promise<void> {
-    for (const seat of panel) {
-      if (seat.status === 'OPEN' || seat.status === 'CLAIMED') {
-        await this.tasks.finish(seat.id, 'CANCELLED', why).catch(() => undefined);
-      }
-    }
-  }
-
-  /** The reviews making up one round's panel, in creation order. */
-  private async reviewPanel(workId: string, round: number): Promise<AgentTask[]> {
-    const all = await this.tasks.list();
-    return all.filter(task => task.reviewOf === workId && (task.reviewRound ?? 1) === round);
-  }
-
-  /** Applies a review verdict to the work it judged. */
-  private async settleReview(review: AgentTask, status: TaskStatus, result?: string): Promise<void> {
-    if (!review.reviewOf) return;
-    let work: AgentTask;
-    try {
-      work = await this.tasks.read(review.reviewOf);
-    } catch {
-      return; // The work was removed; nothing to settle.
-    }
-
-    // With a panel, votes are counted within this review's own round.
-    const round = review.reviewRound ?? 1;
-    const panel = await this.reviewPanel(work.id, round);
-    const seats = Math.max(panel.length, work.reviewers ?? 1);
-    const approvals = panel.filter(seat => seat.status === 'DONE').length;
-    const rejections = panel.filter(seat => seat.status === 'FAILED').length;
-    const majority = Math.floor(seats / 2) + 1;
-    // An even panel can split; a split counts as not approved.
-    const allIn = approvals + rejections >= seats;
-
-    if (approvals >= majority) {
-      // Decided: cancel the seats that have not voted yet.
-      await this.closeUndecided(panel, `maioria ja aprovou ${work.id} (${approvals}/${seats})`);
-      await this.store.appendActivity(
-        this.makeActivity({
-          agentId: review.claimedBy ?? review.createdBy,
-          type: 'TASK',
-          description:
-            seats > 1
-              ? `revisao aprovou ${work.id} por maioria (${approvals}/${seats}): ${work.title}`
-              : `revisao aprovou ${work.id}: ${work.title}`,
-          pointer: work.pointer
-        }),
-        { history: false }
-      );
-      return;
-    }
-
-    if (rejections < majority && !allIn) return; // Still short of a decision; wait for the rest.
-
-    const split = rejections < majority;
-    if (split) {
-      result = `painel empatou ${approvals}x${rejections} sem maioria; ultima objecao: ${result ?? 'sem motivo'}`;
-    }
-    await this.closeUndecided(panel, `maioria ja rejeitou ${work.id} (${rejections}/${seats})`);
-
-    // Rejected: requeue the work with the reviewer's reason.
-    const rounds = (work.reviewRounds ?? 0) + 1;
-    const { maxReviewRounds } = await this.config();
-    const now = nowIso();
-
-    // Cap the rejections so a doer and a reviewer cannot loop forever.
-    if (maxReviewRounds > 0 && rounds >= maxReviewRounds) {
-      work.status = 'FAILED';
-      work.reviewRounds = rounds;
-      work.result =
-        `revisao rejeitou ${rounds}x (limite maxReviewRounds=${maxReviewRounds}); ` +
-        `ultima objecao: ${result ?? 'sem motivo informado'}. Precisa de decisao humana.`;
-      work.finishedAt = now;
-      work.claimedBy = undefined;
-      work.claimExpiresAt = undefined;
-      work.updatedAt = now;
-      await this.tasks.write(work);
-      await this.store.appendActivity(
-        this.makeActivity({
-          agentId: review.claimedBy ?? review.createdBy,
-          type: 'TASK',
-          description: `revisao rejeitou ${work.id} pela ${rounds}a vez: parou no limite, aguarda decisao humana`,
-          pointer: work.pointer
-        }),
-        { history: false }
-      );
-      return;
-    }
-
-    work.status = 'OPEN';
-    work.claimedBy = undefined;
-    work.claimedAt = undefined;
-    work.claimExpiresAt = undefined;
-    work.finishedAt = undefined;
-    work.reviewRounds = rounds;
-    work.result = `revisao rejeitou (${review.id}): ${result ?? 'sem motivo informado'}`;
-    work.detail = `${work.detail ?? ''}
-
-REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
-    work.updatedAt = now;
-    await this.tasks.write(work);
-
-    // Queue a new review round for the redone work.
-    const next = await this.queueReviewPanel(
-      work,
-      rounds + 1,
-      review.createdBy,
-      review.assignedTo,
-      seats,
-      result
-    );
-    work.reviewTaskId = next[0].id;
-    work.updatedAt = nowIso();
-    await this.tasks.write(work);
-
-    await this.store.appendActivity(
-      this.makeActivity({
-        agentId: review.claimedBy ?? review.createdBy,
-        type: 'TASK',
-        description: `revisao rejeitou ${work.id} e devolveu para a fila (rodada ${rounds}): ${result ?? 'sem motivo'}`,
-        pointer: work.pointer
-      }),
-      { history: false }
-    );
   }
 
   async createSchedule(input: CreateScheduleInput): Promise<TaskSchedule> {
