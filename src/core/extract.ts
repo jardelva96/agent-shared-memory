@@ -174,6 +174,24 @@ function escapeRegExp(value: string): string {
 }
 
 /**
+ * Where a source text's brackets stop balancing: the 1-based line where more close than
+ * opened, or the end when some never close. Undefined when they balance. Strings, comments
+ * and regex literals are skipped, the same way the slicer reads them.
+ */
+export function unbalancedAt(source: string): { line: number; message: string } | undefined {
+  const state: { inBlockComment: boolean; sawBrace?: boolean; openQuote?: string } = { inBlockComment: false };
+  const lines = source.split(/\r?\n/);
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    depth += countBraces(lines[i], state);
+    if (depth < 0) return { line: i + 1, message: 'a closing bracket with nothing open' };
+  }
+  if (state.openQuote) return { line: lines.length, message: `a string opened with ${state.openQuote} never closes` };
+  if (depth > 0) return { line: lines.length, message: `${depth} bracket(s) never close` };
+  return undefined;
+}
+
+/**
  * Walks a line counting braces, ignoring the ones inside strings and comments.
  *
  * `state.inBlockComment` carries across lines; a brace inside `/* ... *\/` or a string

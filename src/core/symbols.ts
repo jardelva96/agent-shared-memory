@@ -18,6 +18,7 @@ import path from 'node:path';
 import { atomicWrite, withFileLock } from '../utils/fs.js';
 import { findDeclaration, maskLiterals, regexEnd, sliceAt } from './extract.js';
 import { resolvePaths } from './paths.js';
+import { syntaxProblem } from './syntax.js';
 import { parsePointer } from './pointer.js';
 
 export interface OutlineEntry {
@@ -361,7 +362,13 @@ export async function findReferences(root: string, symbol: string, limit = 100):
  * brings its own doc comment, attribute or decorator, it replaces the old one instead of
  * stacking on top of it.
  */
-export async function editSymbol(root: string, pointer: string, code: string, mode: EditMode = 'replace'): Promise<EditResult> {
+export async function editSymbol(
+  root: string,
+  pointer: string,
+  code: string,
+  mode: EditMode = 'replace',
+  options: { checkSyntax?: boolean } = {}
+): Promise<EditResult> {
   const parsed = parsePointer(pointer);
   if (!parsed?.file || !parsed.symbol) throw new Error(`Not a symbol pointer: ${JSON.stringify(pointer)}. Use "file::symbol".`);
   const base = path.resolve(root);
@@ -407,7 +414,109 @@ export async function editSymbol(root: string, pointer: string, code: string, mo
       fromLine = before + 1;
     }
 
-    await atomicWrite(target, lines.join(eol));
-    return { file: rel.split(path.sep).join('/'), symbol: parsed.symbol!, mode, fromLine, toLine: fromLine + written.length - 1, removedLines };
+    const next = lines.join(eol);
+    const relPosix = rel.split(path.sep).join('/');
+    // A change that turns a file that parsed into one that does not is refused, with the
+    // line: the agent fixes it now, and nobody sharing the file inherits it. A file that was
+    // already broken is not held to it -- the edit may be the fix.
+    if (options.checkSyntax !== false) {
+      const after = await syntaxProblem(relPosix, next, base);
+      if (after && !(await syntaxProblem(relPosix, source, base))) {
+        throw new Error(
+          `Not written: this change breaks the syntax of ${relPosix}${after.line ? ` at line ${after.line}` : ''}: ${after.message}. ` +
+            'Fix the code and send it again.'
+        );
+      }
+    }
+    await atomicWrite(target, next);
+    return { file: relPosix, symbol: parsed.symbol!, mode, fromLine, toLine: fromLine + written.length - 1, removedLines };
   });
+}
+
+export interface RenamePlan {
+  /** What was looked up and what it becomes. */
+  from: string;
+  to: string;
+  declaration?: SymbolMatch;
+  /** Every line that changes, declaration included. */
+  changes: Array<{ file: string; line: number; before: string; after: string }>;
+  /** Why the rename cannot be done safely, when it cannot. */
+  refused?: string;
+  applied: boolean;
+}
+
+/**
+ * Renames a symbol everywhere it is used, as a plan first and on disk only when asked.
+ *
+ * Without a type checker a use is a matching word outside strings and comments, so a name
+ * declared more than once in the project is refused: it cannot be told which of them a use
+ * means, and a wrong rename is worse than none. Each file is re-read under the edit lock and
+ * syntax-checked before it is written.
+ */
+export async function renameSymbol(root: string, symbol: string, to: string, options: { apply?: boolean } = {}): Promise<RenamePlan> {
+  const from = bareName(symbol);
+  const plan: RenamePlan = { from, to, changes: [], applied: false };
+  if (!/^[A-Za-z_$][\w$]*$/.test(to)) return { ...plan, refused: `Not a valid name: ${JSON.stringify(to)}.` };
+  if (to === from) return { ...plan, refused: 'The new name is the old one.' };
+
+  const declarations = await findSymbol(root, from, 50);
+  if (declarations.length === 0) return { ...plan, refused: `${from} is not declared anywhere in the project.` };
+  if (declarations.length > 1) {
+    return {
+      ...plan,
+      refused:
+        `${from} is declared ${declarations.length} times (${declarations.slice(0, 5).map(d => d.pointer).join(', ')}). ` +
+        'A rename by name cannot tell their uses apart; rename them by hand.'
+    };
+  }
+  if ((await findSymbol(root, to, 1)).length > 0) return { ...plan, refused: `${to} is already declared in the project.` };
+  plan.declaration = declarations[0];
+
+  const word = new RegExp(`(?<![\w$])${from.replace(/[$]/g, '\$')}(?![\w$])`, 'g');
+  const touched = new Map<string, number[]>();
+  for await (const file of codeFiles(root)) {
+    const source = await readFile(file, 'utf8').catch(() => '');
+    if (!source.includes(from)) continue;
+    const lines = source.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const masked = maskLiterals(lines[i]);
+      if (!new RegExp(word.source).test(masked)) continue;
+      const after = renameInLine(lines[i], masked, word, to);
+      const rel = relative(root, file);
+      plan.changes.push({ file: rel, line: i + 1, before: lines[i].trim(), after: after.trim() });
+      touched.set(file, [...(touched.get(file) ?? []), i]);
+    }
+  }
+  if (!options.apply) return plan;
+
+  const base = path.resolve(root);
+  for (const [file, lineNumbers] of touched) {
+    const rel = path.relative(base, file);
+    const lockName = createHash('sha1').update(rel.toLowerCase()).digest('hex').slice(0, 16);
+    await withFileLock(path.join(resolvePaths(base).locksDir, `edit-${lockName}.lock`), async () => {
+      const source = await readFile(file, 'utf8');
+      const eol = source.includes('\r\n') ? '\r\n' : '\n';
+      const lines = source.split(/\r?\n/);
+      for (const i of lineNumbers) lines[i] = renameInLine(lines[i], maskLiterals(lines[i]), word, to);
+      const next = lines.join(eol);
+      const relPosix = rel.split(path.sep).join('/');
+      const broken = await syntaxProblem(relPosix, next, base);
+      if (broken && !(await syntaxProblem(relPosix, source, base))) {
+        throw new Error(`Rename stopped at ${relPosix}: it would break the syntax at line ${broken.line ?? '?'} (${broken.message}). Files before it were renamed.`);
+      }
+      await atomicWrite(file, next);
+    });
+  }
+  return { ...plan, applied: true };
+}
+
+/** Replaces the word only where the masked line shows code, so strings and comments keep it. */
+function renameInLine(line: string, masked: string, word: RegExp, to: string): string {
+  let out = '';
+  let last = 0;
+  for (const match of masked.matchAll(new RegExp(word.source, 'g'))) {
+    out += line.slice(last, match.index) + to;
+    last = match.index! + match[0].length;
+  }
+  return out + line.slice(last);
 }

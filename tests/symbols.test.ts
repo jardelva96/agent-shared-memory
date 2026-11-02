@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { editSymbol, findReferences, findSymbol, outlineSymbols } from '../src/core/symbols.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../src/core/symbols.js';
 import { extractSymbol } from '../src/core/extract.js';
 
 async function withProject(files: Record<string, string>, fn: (root: string) => Promise<void>): Promise<void> {
@@ -151,4 +151,63 @@ test('an edit refuses a pointer outside the project or a symbol that is not ther
     await assert.rejects(editSymbol(root, 'src/m.ts::naoExiste', 'x'), /was not found/);
     await assert.rejects(editSymbol(root, 'src/m.ts', 'x'), /Not a symbol pointer/);
   });
+});
+
+test('an edit that breaks the syntax is refused with the line, and nothing is written', async () => {
+  // The mistake a real agent made in a shared file: a regex without its closing slash.
+  const broken = 'export function contarPalavras(texto) {\n  const re = /\p{L}+gu;\n  return 0;\n}';
+  await withProject(
+    {
+      'src/texto.js': TEXTO,
+      'src/a.ts': 'export function a(): number {\n  return 1;\n}\n',
+      'src/a.py': 'def a():\n    return 1\n',
+      'src/A.cs': 'public class A\n{\n    public int B() { return 1; }\n}\n'
+    },
+    async root => {
+      await assert.rejects(editSymbol(root, 'src/texto.js::contarPalavras', broken), /Not written: this change breaks the syntax of src\/texto\.js at line \d/);
+      assert.equal(await readFile(path.join(root, 'src/texto.js'), 'utf8'), TEXTO, 'untouched');
+
+      await assert.rejects(editSymbol(root, 'src/a.ts::a', 'export function a(): number {\n  return (1;\n}'), /breaks the syntax of src\/a\.ts/);
+      await assert.rejects(editSymbol(root, 'src/a.py::a', 'def a(:\n    return 1'), /breaks the syntax of src\/a\.py/);
+      await assert.rejects(editSymbol(root, 'src/A.cs::A.B', 'public int B() { return 1; '), /breaks the syntax of src\/A\.cs/);
+
+      // A correct change still goes through, in every language.
+      await editSymbol(root, 'src/a.py::a', 'def a():\n    return 2');
+      await editSymbol(root, 'src/A.cs::A.B', 'public int B() { return 2; }');
+      assert.match(await readFile(path.join(root, 'src/A.cs'), 'utf8'), /return 2;/);
+    }
+  );
+});
+
+test('a file that was already broken can still be edited, since the edit may be the fix', async () => {
+  await withProject({ 'src/m.js': 'export function a() {\n  return (1;\n}\n' }, async root => {
+    await editSymbol(root, 'src/m.js::a', 'export function a() {\n  return 1;\n}');
+    assert.match(await readFile(path.join(root, 'src/m.js'), 'utf8'), /return 1;/);
+  });
+});
+
+test('rename shows the plan first, changes only code, and refuses an ambiguous name', async () => {
+  await withProject(
+    {
+      'src/a.ts': 'export function calcTotal(a: number) {\n  return a;\n}\n',
+      'src/b.ts': "import { calcTotal } from './a';\n// calcTotal em comentario\nexport const x = calcTotal(1);\nconst s = 'calcTotal';\n",
+      'src/c.ts': 'export function load() {}\n',
+      'src/d.ts': 'export function load() {}\n'
+    },
+    async root => {
+      const plan = await renameSymbol(root, 'calcTotal', 'somarTotal');
+      assert.equal(plan.applied, false);
+      assert.deepEqual(plan.changes.map(c => `${c.file}:${c.line}`), ['src/a.ts:1', 'src/b.ts:1', 'src/b.ts:3']);
+      assert.match(await readFile(path.join(root, 'src/b.ts'), 'utf8'), /calcTotal\(1\)/, 'nothing written yet');
+
+      await renameSymbol(root, 'calcTotal', 'somarTotal', { apply: true });
+      const b = await readFile(path.join(root, 'src/b.ts'), 'utf8');
+      assert.match(b, /import \{ somarTotal \}/);
+      assert.match(b, /\/\/ calcTotal em comentario/, 'comments keep the old word');
+      assert.match(b, /'calcTotal'/, 'strings keep it too');
+
+      assert.match((await renameSymbol(root, 'load', 'carregar')).refused!, /declared 2 times/);
+      assert.match((await renameSymbol(root, 'somarTotal', 'load')).refused!, /already declared/);
+    }
+  );
 });
