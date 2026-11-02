@@ -210,3 +210,18 @@ test('rename shows the plan first, changes only code, and refuses an ambiguous n
     }
   );
 });
+
+test('rename changes the whole word only, never part of a longer name', async () => {
+  await withProject(
+    {
+      'src/m.ts': 'export function total(a: number) {\n  return a;\n}\nconst subtotal = 1;\nconst x = total(subtotal) + subtotal + totals();\nfunction totals() { return 0; }\n'
+    },
+    async root => {
+      await renameSymbol(root, 'total', 'sum', { apply: true });
+      const m = await readFile(path.join(root, 'src/m.ts'), 'utf8');
+      assert.match(m, /function sum\(a/);
+      assert.match(m, /const x = sum\(subtotal\) \+ subtotal \+ totals\(\)/);
+      assert.doesNotMatch(m, /subsum|sums/);
+    }
+  );
+});

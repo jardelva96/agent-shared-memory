@@ -2,6 +2,7 @@
  * Working with code by symbol instead of by file: what a file declares, where a name is declared
  * across the project, where it is used, and changing one symbol in place.
  */
+import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -261,30 +262,52 @@ const SKIP_DIRS = new Set([
 const CODE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|cs|java|kt|kts|go|rs|rb|php|swift|c|cc|cpp|h|hpp|scala|dart|lua|vue|svelte)$/i;
 const MAX_FILE_BYTES = 1_000_000;
 
+/** Files read at once by the project-wide searches. */
+const READ_BATCH = 32;
+
 /** Every source file under `dir`, skipping dependencies, build output and this tool's own folder. */
 export async function* codeFiles(root: string, dir = root, budget = { left: 20_000 }): AsyncGenerator<string> {
-  let names: string[];
+  let entries: Dirent[];
   try {
-    names = await readdir(dir);
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
-  for (const name of names.sort()) {
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     if (budget.left <= 0) return;
+    const name = entry.name;
     const full = path.join(dir, name);
-    let info;
-    try {
-      info = await stat(full);
-    } catch {
-      continue;
-    }
-    if (info.isDirectory()) {
+    // The entry knows its own type; only a link, or a code file's size, costs a stat.
+    const kind = entry.isSymbolicLink() ? await stat(full).catch(() => undefined) : entry;
+    if (!kind) continue;
+    if (kind.isDirectory()) {
       if (!SKIP_DIRS.has(name) && !name.startsWith('.')) yield* codeFiles(root, full, budget);
-    } else if (CODE_FILE.test(name) && info.size <= MAX_FILE_BYTES && !/\.d\.ts$/.test(name)) {
+    } else if (kind.isFile() && CODE_FILE.test(name) && !/\.d\.ts$/.test(name)) {
+      const size = (await stat(full).catch(() => undefined))?.size ?? Infinity;
+      if (size > MAX_FILE_BYTES) continue;
       budget.left--;
       yield full;
     }
   }
+}
+
+/** Each source file with its text, read in parallel batches, in the order codeFiles walks them. */
+async function* codeSources(root: string): AsyncGenerator<{ file: string; source: string }> {
+  let batch: string[] = [];
+  const read = () => Promise.all(batch.map(async file => ({ file, source: await readFile(file, 'utf8').catch(() => '') })));
+  for await (const file of codeFiles(root)) {
+    batch.push(file);
+    if (batch.length < READ_BATCH) continue;
+    yield* await read();
+    batch = [];
+  }
+  if (batch.length) yield* await read();
+}
+
+/** `name` as a whole word, never part of a longer identifier. */
+function wholeWord(name: string, flags = ''): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`, flags);
 }
 
 function relative(root: string, file: string): string {
@@ -302,10 +325,9 @@ export async function findSymbol(root: string, symbol: string, limit = 20): Prom
   const name = bareName(symbol);
   const qualifier = symbol.includes('.') ? symbol.split('(')[0].split('.').slice(-2, -1)[0] : undefined;
   if (!name) return [];
-  const word = new RegExp(`(?<![\\w$])${name.replace(/[$]/g, '\\$')}(?![\\w$])`);
+  const word = wholeWord(name);
   const matches: SymbolMatch[] = [];
-  for await (const file of codeFiles(root)) {
-    const source = await readFile(file, 'utf8').catch(() => '');
+  for await (const { file, source } of codeSources(root)) {
     if (!word.test(source)) continue;
     for (const item of outlineSymbols(source, file)) {
       if (item.name !== name || (qualifier && item.container && item.container !== qualifier)) continue;
@@ -321,10 +343,9 @@ export async function findSymbol(root: string, symbol: string, limit = 20): Prom
 export async function findReferences(root: string, symbol: string, limit = 100): Promise<ReferenceMatch[]> {
   const name = bareName(symbol);
   if (!name) return [];
-  const word = new RegExp(`(?<![\\w$])${name.replace(/[$]/g, '\\$')}(?![\\w$])`);
+  const word = wholeWord(name);
   const found: ReferenceMatch[] = [];
-  for await (const file of codeFiles(root)) {
-    const source = await readFile(file, 'utf8').catch(() => '');
+  for await (const { file, source } of codeSources(root)) {
     if (!word.test(source)) continue;
     const declared = new Set(outlineSymbols(source, file).filter(s => s.name === name).map(s => s.declarationLine));
     const lines = source.split('\n');
@@ -439,10 +460,9 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
   if ((await findSymbol(root, to, 1)).length > 0) return { ...plan, refused: `${to} is already declared in the project.` };
   plan.declaration = declarations[0];
 
-  const word = new RegExp(`(?<![\w$])${from.replace(/[$]/g, '\$')}(?![\w$])`, 'g');
+  const word = wholeWord(from, 'g');
   const touched = new Map<string, number[]>();
-  for await (const file of codeFiles(root)) {
-    const source = await readFile(file, 'utf8').catch(() => '');
+  for await (const { file, source } of codeSources(root)) {
     if (!source.includes(from)) continue;
     const lines = source.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
