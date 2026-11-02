@@ -1,10 +1,43 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 Every number below was measured on real code (TypeScript, C# and Python projects, about 760
 files) against the compilers' own spans, or with free models from three providers working as
 agents. The harness is in `bench/`.
+
+### Several machines, live
+
+- `agent-memory hub` shares one memory over HTTP, behind a token, answering only a closed list
+  of coordination operations (status, records, messages, the queue, reservations, facts). On
+  the other machines `--remote URL --token T`, or `AGENT_MEMORY_REMOTE` and
+  `AGENT_MEMORY_TOKEN`, make the CLI, the MCP server and the editor hooks use it. Code is still
+  read and edited locally; a file reserved on one machine is refused on another the moment the
+  reservation is granted, not after a sync.
+
+### Edits that cannot break a file
+
+- An edit by symbol that would turn a file that parsed into one that does not is refused, with
+  the line, and nothing is written: Node checks JavaScript, the project's own TypeScript checks
+  TypeScript, Python's ast checks Python, and a bracket-and-string balance check covers the
+  rest. In a measured race an agent wrote a regex without its closing slash into a shared file
+  and every test of both agents stopped loading.
+- `rename <Name> <NewName>` / `memory_rename`: a plan of every line first, `--apply` to write.
+  Strings and comments keep the old word; a name declared more than once is refused, since its
+  uses cannot be told apart without a type checker.
+
+### An agent that cannot work right now does not fail its task
+
+- An executor that exits 75 (EX_TEMPFAIL: out of quota, rate limited) has its task handed back
+  to the queue for another agent, and that runner stops. Measured: an agent ran out of its daily
+  quota after writing correct code (10 of 10 hidden tests), and closing the task as FAILED threw
+  the work away. The attempt still counts, so a task every agent hands back is dead-lettered.
+
+### Seeing what happened
+
+- `task show <id>` / `memory_task_show`: a task, every review and verdict, and each journal
+  entry that names it.
+- The live dashboard shows reserved files and project facts.
 
 ### Work by symbol, without a language server
 
@@ -71,5 +104,12 @@ on every recorded change.
   passed, and 46% fewer tokens were spent, since an agent writes its function, not the file.
 - Reading by pointer instead of whole files: the same answers right, with 66% fewer tokens;
   on the Groq free tier, whole files did not fit at all in 30 of 107 runs.
+- Finding code nobody pointed at (only the function's name is known): with a text search kit
+  against the symbol tools, the same 14 of 15 paired answers right and 75% fewer tokens with
+  the symbol tools; on a 97 kB C# file, 2,354 tokens against 60,076.
+- The ten coding tasks again, with tasks in separate files: whole-file writes, edits by symbol
+  and edits by symbol with review passed 78, 80 and 82 of 91 hidden tests, a difference within
+  chance for one run. The failures were free models answering empty and a daily quota running
+  out mid-task, which is what the exit-75 hand-back above now recovers.
 - The queue, with four agents from two providers: no task claimed twice, no agent reviewing
   its own work, no task started before its dependency, in 40 audited runs.

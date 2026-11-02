@@ -1,115 +1,157 @@
 # Agent Shared Memory
 
-Memória operacional compartilhada para vários agentes de IA trabalhando no mesmo repositório.
+[Português](README.pt-BR.md)
 
-**Agent Shared Memory** é uma ferramenta local para coordenar agentes de programação como Codex,
-Claude Code, Cursor, modelos via Ollama ou qualquer runner que consiga executar comandos. Ela cria
-uma pasta `.agents/` dentro do projeto monitorado e mantém, em arquivos versionáveis ou locais, o
-estado atual de cada agente, intenções de mudança, histórico, mensagens, fila de tarefas,
-agendamentos, revisões e um dashboard ao vivo.
+Local-first operational memory for multiple AI coding agents working in the same repository.
 
-A proposta é simples: antes de uma alteração relevante, o agente anuncia **o que vai fazer**, **onde vai mexer** e **por quê**. Durante o trabalho, todos conseguem ver o estado atual dos demais. Depois da alteração, o agente registra o resultado no seu próprio histórico.
+**Agent Shared Memory** coordinates agents such as Codex, Claude Code, Cursor, Ollama-based
+runners, or any CLI/API-driven worker. It creates a `.agents/` directory inside the target project
+and keeps agent state, declared intent, history, messages, durable tasks, schedules, reviews and a
+live dashboard in plain local files.
 
-## Por que existe
+The workflow is intentionally simple: before a meaningful change, an agent announces **what it will
+do**, **where it will work** and **why**. While work is happening, every agent can see the current
+state of the others. After a change, the agent records the result in its own append-only history.
 
-Quando dois ou mais agentes trabalham no mesmo código, o problema não é só concorrência de Git. O
-problema real é operacional: um agente não sabe o que o outro leu, que arquivo pretende tocar, qual
-mudança já foi feita, quem está bloqueado, qual tarefa ficou pendente e se uma revisão realmente
-aconteceu.
+## What it does that other tools do not
 
-Este projeto resolve isso com uma coordenação simples, local-first e auditável:
+- **One command for Claude Code.** `agent-memory setup claude` installs hooks and the MCP
+  server: every session starts with a briefing (`prime`), a write to a file another agent
+  reserved is refused before it happens, and every write tells the other agents on that file
+  that their copy is stale. `agent-memory setup git` adds a pre-commit guard.
+- **Reserved files.** `agent-memory reserve --agent A src/auth/` claims files, folders or globs
+  for a limited time, exclusive or shared, all or nothing. Others are refused at write time and
+  at commit; reservations expire on their own.
+- **Edit by symbol, safely.** `memory_replace_symbol` changes one function, method or class in
+  place. The file is re-read under a lock when the edit applies, so two agents changing two
+  functions of one file both keep their work, and an edit that would break the file's syntax is
+  refused with the line, before anything is written.
+- **Read by symbol, without a language server.** `symbols <file>`, `find <Name|Type.member>`,
+  `refs <Name>`, `rename <Name> <NewName>` (a plan first, `--apply` to write), and
+  `memory_read_pointer "file::Type.member"`. Works in TypeScript, JavaScript, Python, C#, Java,
+  Go and more, with nothing else installed.
+- **Several machines, live.** `agent-memory hub` shares one memory over the network with a
+  token; on the other machines set `AGENT_MEMORY_REMOTE` and `AGENT_MEMORY_TOKEN`. A file
+  reserved on one machine is refused on another the moment it is granted. Code is still read
+  and edited locally.
+- **Agents from any vendor in one queue,** with priorities (`--priority 0-4`), dependencies,
+  `task ready`, `task show` (the whole story of a task) and reviews that never go to the agent
+  that did the work, decided by majority when you ask for a panel.
 
-- **memória compartilhada** gerada automaticamente em `.agents/SHARED_MEMORY.md`;
-- **estado individual** por agente em JSON e histórico append-only em Markdown;
-- **detecção de sobreposição** por ponteiros semânticos como `arquivo::Classe.metodo()`;
-- **mensagens diretas** e dependências explícitas entre agentes;
-- **fila durável de tarefas**, com claim, retry, dead-letter, dependências e síntese;
-- **revisão obrigatória**, incluindo painel aberto com `--reviewers N` e decisão por maioria;
-- **runner local** para executar agentes por CLI, API local ou scripts próprios;
-- **servidor MCP** para expor tudo como ferramentas nativas a clientes compatíveis;
-- **watcher de Git** para comparar mudanças reais do working tree com o que foi declarado;
-- **dashboard local** via SSE para acompanhar agentes, conflitos, inbox e atividade.
+### Measured, not claimed
 
-## Status do projeto
+Every number comes from `bench/` and can be run again (details in [CHANGELOG.md](CHANGELOG.md)):
 
-- Linguagem: TypeScript, Node.js 20+.
-- Pacote: `agent-shared-memory`.
-- Binário: `agent-memory`.
-- Versão atual: `1.2.0`.
-- Testes locais: `npm test`.
+| What | Result |
+|---|---|
+| Two agents changing two functions of one file at once (8 races, free models) | whole-file writes erased the other's work 3 of 7 times; by symbol, 0 of 8, with 96% of hidden tests passing against 73%, and 46% fewer tokens |
+| Reading by pointer instead of whole files (213 runs, 10 models) | same answers right, 66% fewer tokens |
+| Finding code when only the name is known: text search against the symbol tools (40 runs) | same answers right, 75% fewer tokens with the symbol tools |
+| Pointer returns exactly the declaration asked for (9,400 declarations, against the compilers) | C# 99.4%, TypeScript 99.3%, Python 98.8% |
+| File outline against the compilers | finds 98.5% to 99.96% of declarations; 99.6% to 100% of what it lists is real |
+| Queue with four agents from two providers | no task claimed twice, no self-review, no dependency skipped, in 40 audited runs |
+
+
+## Why It Exists
+
+When several agents work in the same codebase, Git conflicts are only part of the problem. The real
+issue is operational awareness: one agent does not know what another agent read, which file it plans
+to touch, what already changed, who is blocked, which task is still open, or whether a review really
+happened.
+
+Agent Shared Memory solves that with a small, local and auditable coordination layer:
+
+- **shared memory** generated automatically at `.agents/SHARED_MEMORY.md`;
+- **per-agent state** in JSON and append-only Markdown history;
+- **overlap detection** using semantic pointers such as `file::Class.method()`;
+- **direct messages** and explicit wait/dependency signals between agents;
+- **durable task queue** with claim, retry, dead-letter, dependencies and synthesis tasks;
+- **review gates**, including open review panels with `--reviewers N` and majority decisions;
+- **local runner** for CLI agents, local model APIs or custom scripts;
+- **MCP server** so compatible clients can use memory as native tools;
+- **Git watcher** that compares real working-tree changes with declared intent;
+- **live dashboard** over SSE for agents, conflicts, inbox counts and recent activity.
+
+## Project Status
+
+- Language: TypeScript, Node.js 20+.
+- Package: `agent-shared-memory`.
+- Binary: `agent-memory`.
+- Current version: `1.2.0`.
+- Tests: `npm test`.
 - Build: `npm run build`.
 
-## Estrutura gerada no projeto monitorado
+## Generated Project Layout
 
 ```text
 .agents/
-├── SHARED_MEMORY.md       # visão central: o que acontece agora
+├── SHARED_MEMORY.md       # central generated view of current activity
 ├── config.json
 ├── state/
-│   ├── AGENT-01.json      # estado atual estruturado
+│   ├── AGENT-01.json      # structured current state
 │   └── AGENT-02.json
 ├── history/
-│   ├── AGENT-01.md        # histórico individual append-only
+│   ├── AGENT-01.md        # per-agent append-only history
 │   ├── AGENT-02.md
-│   └── archive/           # históricos rotacionados por compact --history
+│   └── archive/           # rotated histories from compact --history
 ├── events/
-│   ├── events.jsonl       # journal global de eventos
-│   └── archive/           # eventos antigos, criado por compact
+│   ├── events.jsonl       # global event journal
+│   └── archive/           # old events created by compact
 ├── inbox/
-│   ├── AGENT-02.jsonl     # mensagens endereçadas ao agente
+│   ├── AGENT-02.jsonl     # messages addressed to the agent
 │   └── AGENT-02.cursor.json
 ├── tasks/
-│   └── T-XXXX.json        # fila de trabalho durável
+│   └── T-XXXX.json        # durable work queue
 ├── schedules/
-│   └── S-XXXX.json        # agendamentos cron
-└── .locks/                # locks internos de escrita
+│   └── S-XXXX.json        # cron schedules
+└── .locks/                # internal write locks
 ```
 
-## Princípios
+## Principles
 
-1. Todo agente lê a memória compartilhada antes de uma alteração relevante.
-2. Todo agente registra `INTENT` antes de alterar código.
-3. Ao terminar uma ação, registra `CHANGED`, `CREATED`, `TESTING` ou `DONE`.
-4. Ponteiros usam arquivo + símbolo + parâmetro, evitando números de linha frágeis.
-5. Cada agente possui um histórico separado.
-6. O arquivo central é **gerado**, nunca editado manualmente pelos agentes.
-7. Conflitos são avisados, não bloqueados automaticamente.
+1. Every agent reads shared memory before a meaningful change.
+2. Every agent records `INTENT` before editing code.
+3. After work, the agent records `CHANGED`, `CREATED`, `TESTING`, `FOUND`, `WAITING` or `DONE`.
+4. Pointers use file + symbol + optional parameter instead of fragile line numbers.
+5. Each agent owns a separate history.
+6. The central memory file is generated and should not be edited manually.
+7. Conflicts are surfaced as warnings, not blocked by force.
 
-## Requisitos
+## Requirements
 
 - Node.js 20+
 - npm
 
-## Comece em 2 minutos
+## Start In 2 Minutes
 
 ```bash
 npm install
 npm run build
 npm link
 
-cd /caminho/do/projeto
-agent-memory init --name "Meu Projeto"
+cd /path/to/project
+agent-memory init --name "My Project"
 agent-memory register --agent AGENT-01 --role Backend --task AUTH-184
 agent-memory status
 agent-memory serve
 ```
 
-Abra o dashboard local:
+Open the local dashboard:
 
 ```text
 http://127.0.0.1:4317
 ```
 
-Em outro terminal ou em outro agente, use outro id apontando para a mesma raiz:
+In another terminal or another agent, use a different id pointing at the same project root:
 
 ```bash
 agent-memory register --agent AGENT-02 --role Frontend --task UI-210
 agent-memory intent --agent AGENT-02 --task UI-210 \
   --pointer "src/app/page.tsx::HomePage" \
-  --message "Ajustar o estado vazio da tela inicial"
+  --message "Update the empty state on the home page"
 ```
 
-## Instalação
+## Installation
 
 ```bash
 npm install
@@ -117,30 +159,30 @@ npm run build
 npm link
 ```
 
-Agora o comando `agent-memory` estará disponível localmente.
+The `agent-memory` command is now available locally.
 
-Sem `npm link`, também é possível usar:
+Without `npm link`, run it through the development script:
 
 ```bash
 npm run dev -- help
 ```
 
-## Inicializar em outro projeto
+## Initialize Another Project
 
-Entre no repositório que será coordenado:
-
-```bash
-cd meu-backend
-agent-memory init --name "Meu Backend"
-```
-
-Ou informe a raiz explicitamente:
+Enter the repository that should be coordinated:
 
 ```bash
-agent-memory init --root /caminho/meu-backend --name "Meu Backend"
+cd my-backend
+agent-memory init --name "My Backend"
 ```
 
-## Registrar agentes
+Or pass the root explicitly:
+
+```bash
+agent-memory init --root /path/to/my-backend --name "My Backend"
+```
+
+## Register Agents
 
 ```bash
 agent-memory register \
@@ -154,82 +196,88 @@ agent-memory register \
   --task ORD-191
 ```
 
-## Fluxo de trabalho recomendado
+## Recommended Workflow
 
-### 1. Consultar o estado
+### 1. Read Current State
 
 ```bash
 agent-memory status
 ```
 
-ou:
+or:
 
 ```bash
 agent-memory memory
 ```
 
-### 2. Anunciar intenção
+### 2. Declare Intent
 
 ```bash
 agent-memory intent \
   --agent AGENT-01 \
   --task AUTH-184 \
   --pointer "src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)" \
-  --message "Adicionar validação de expiração do refresh token" \
-  --reason "Tokens expirados ainda estão sendo aceitos"
+  --message "Add expiration validation for refresh tokens" \
+  --reason "Expired refresh tokens are still accepted"
 ```
 
-### 3. Registrar alteração
+### 3. Record The Change
 
 ```bash
 agent-memory changed \
   --agent AGENT-01 \
   --pointer "src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)" \
-  --message "Validação de expiresAt adicionada; token expirado agora é rejeitado"
+  --message "expiresAt validation added; expired tokens are now rejected"
 ```
 
-### 4. Registrar teste
+### 4. Record Testing
 
 ```bash
 agent-memory testing \
   --agent AGENT-01 \
   --pointer "tests/Auth/TokenServiceTests.cs::ExpiredRefreshToken_ShouldFail()" \
-  --message "Teste de regressão criado e executado com sucesso"
+  --message "Regression test added and passing"
 ```
 
-### 5. Finalizar
+### 5. Finish
 
 ```bash
 agent-memory done \
   --agent AGENT-01 \
-  --message "AUTH-184 concluída; validação e testes passando"
+  --message "AUTH-184 completed; validation and tests are passing"
 ```
 
-## Ciclo de vida do agente
+## Agent Lifecycle
 
-### Formato do id
+### Agent Ids
 
-Um id pode conter letras, dígitos, ponto, traço e sublinhado, com pelo menos uma letra ou dígito. Qualquer outra coisa é **recusada**, não corrigida.
+An id may contain letters, digits, dots, dashes and underscores, and must contain at least one letter
+or digit. Any other value is rejected instead of sanitized.
 
-Isso é deliberado: o id vira nome de arquivo. Se `AGENT/01` fosse sanitizado para `AGENT-01`, os dois passariam a compartilhar estado, histórico e caixa de entrada — e `unregister("AGENT/01")` apagaria o registro do `AGENT-01`. Recusar é a única forma de garantir que os dados de um agente sejam dele.
+This is deliberate: the id becomes a filename. If `AGENT/01` were sanitized into `AGENT-01`, both
+would share state, history and inbox files, and `unregister("AGENT/01")` could remove the wrong
+agent. Rejecting invalid ids is the only reliable way to keep one agent's data separate from
+another's.
 
-Ids são exclusivos: registrar um id que já existe falha, para que dois agentes diferentes não passem a compartilhar estado por acidente.
+Ids are exclusive: registering an existing id fails, so two agents do not accidentally share state.
 
-Quando o processo de um agente reinicia, use `--force` para abrir uma sessão nova preservando o histórico:
+When an agent process restarts, use `--force` to open a fresh session while preserving history:
 
 ```bash
 agent-memory register --agent AGENT-01 --force
 ```
 
-Quando um agente sai de vez, remova-o do painel:
+When an agent exits permanently, remove it from the panel:
 
 ```bash
 agent-memory unregister --agent AGENT-01
 ```
 
-O `unregister` apaga apenas o estado. O histórico continua como trilha de auditoria, e o journal recebe um evento `UNREGISTERED`. Se o mesmo id for registrado de novo depois, o histórico anterior é mantido e a nova sessão entra abaixo de um separador — o arquivo nunca é sobrescrito.
+`unregister` removes only current state. History stays as an audit trail, and the journal receives
+an `UNREGISTERED` event. If the same id is registered later, the previous history is kept and the new
+session is appended below a separator.
 
-## Journal de eventos
+## Event Journal
 
 ```bash
 agent-memory log --limit 20
@@ -237,23 +285,20 @@ agent-memory log --agent AGENT-01
 agent-memory log --json
 ```
 
-## Compactação
+## Compaction
 
-### Automática
-
-O journal é arquivado sozinho ao passar de `autoCompactAfterEvents` (padrão 5000), mantendo a metade mais recente:
+The journal is archived automatically after `autoCompactAfterEvents` events, keeping the newest half
+live. The default is 5000:
 
 ```bash
-agent-memory config --auto-compact 5000   # 0 desliga
+agent-memory config --auto-compact 5000   # 0 disables it
 ```
 
-Isso não é só arrumação. Toda escrita regenera o painel, e regenerar lê o journal inteiro — então o journal em crescimento encarece **toda escrita de todo agente**. Medido: sem compactação, a latência por escrita passou de 6,8 ms (2 mil eventos) para 12,7 ms (40 mil) e continuava subindo; com ela ligada, fica em ~6 ms independentemente do volume acumulado, porque o journal vivo estabiliza.
+This is not cosmetic. Every write regenerates the dashboard memory, and regeneration reads the live
+journal. Without compaction, write latency grew from 6.8 ms at 2,000 events to 12.7 ms at 40,000 and
+kept rising. With compaction enabled, it stays around 6 ms because the live journal stabilizes.
 
-O gatilho é gratuito: a regeneração do painel já leu o journal, então o tamanho vem junto, sem uma segunda leitura. Vários agentes podem disparar ao mesmo tempo — o arquivamento é idempotente sob lock, então o primeiro corta e os demais não encontram nada a fazer.
-
-### Manual
-
-O `compact` arquiva o excedente em vez de descartar:
+Manual compaction archives old records instead of deleting them:
 
 ```bash
 agent-memory compact --keep 500 --dry-run
@@ -261,147 +306,120 @@ agent-memory compact --keep 500
 agent-memory compact --keep 500 --history
 ```
 
-- os eventos além dos `--keep` mais recentes vão para `.agents/events/archive/`;
-- com `--history`, cada `history/AGENT-X.md` vai para `.agents/history/archive/` e um arquivo novo é aberto apontando para o arquivado;
-- cada caixa de entrada é reduzida a `--keep` mensagens, mas **somente as já lidas são descartadas** — uma mensagem que o destinatário ainda não viu nunca é removida, mesmo que isso deixe a caixa acima do limite;
-- `--dry-run` mostra o que seria feito sem escrever nada.
-
-## Espera por outro agente
+## Waiting And Messages
 
 ```bash
 agent-memory waiting \
   --agent AGENT-03 \
   --for AGENT-02 \
   --pointer "src/Payments/RefundService.cs::RefundService.CreateRefund()" \
-  --message "Aguardando CancelAsync() ser concluído antes de integrar reembolso"
-```
+  --message "Waiting for CancelAsync() before integrating refunds"
 
-Isso **entrega uma mensagem na caixa do AGENT-02**. Declarar uma dependência sem avisar quem bloqueia só funcionaria se o outro agente lesse o painel por acaso.
-
-Repetir a mesma espera não reenvia o aviso; mudar o ponteiro sim, porque é informação nova.
-
-## Mensagens entre agentes
-
-```bash
 agent-memory send \
   --from AGENT-02 \
   --to AGENT-03 \
-  --message "CancelAsync concluído, pode integrar" \
+  --message "CancelAsync is done; refund integration can continue" \
   --pointer "src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)"
 
-agent-memory inbox --agent AGENT-03            # não lidas, e marca como lidas
-agent-memory inbox --agent AGENT-03 --peek     # lê sem marcar
-agent-memory inbox --agent AGENT-03 --all      # caixa inteira
+agent-memory inbox --agent AGENT-03            # unread messages, then marks them read
+agent-memory inbox --agent AGENT-03 --peek     # read without marking
+agent-memory inbox --agent AGENT-03 --all      # full inbox
 ```
 
-Cada destinatário tem uma fila append-only em `.agents/inbox/`, com um cursor separado registrando a última mensagem confirmada — o log de mensagens nunca é reescrito.
-
-A contagem de não lidas aparece onde o agente já olha, e não só em quem roda `inbox`: na coluna `INBOX` do `status`, no `memory_status` do MCP e no painel. Uma caixa de entrada que exige lembrar de consultar não seria lida.
-
-Entrega para um agente não registrado é recusada. Uma espera por um agente inexistente continua sendo registrada — só não tem para onde entregar.
+Every recipient has an append-only queue in `.agents/inbox/`, with a separate cursor recording the
+last acknowledged message. Unread counts appear in `status`, MCP `memory_status`, and the dashboard.
 
 ## Heartbeat
 
 ```bash
 agent-memory heartbeat --agent AGENT-01
-```
-
-Por padrão, um agente sem heartbeat/atividade por mais de 60 segundos aparece como `OFFLINE` no painel central. Isso pode ser alterado:
-
-```bash
 agent-memory config --stale 120
 ```
 
-## Detecção de conflito
+By default, an agent with no heartbeat or activity for more than 60 seconds appears as `OFFLINE`.
 
-Se `AGENT-01` estiver trabalhando em:
+## Conflict Detection
+
+If `AGENT-01` is working on:
 
 ```text
 src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)
 ```
 
-e `AGENT-05` anunciar uma intenção sobre o mesmo símbolo, o comando registra a ação, mas também exibe um aviso:
+and `AGENT-05` declares intent on the same symbol, the command records the action and prints a
+warning:
 
 ```text
 WARNING: 1 active overlap(s) detected:
 - AGENT-01 [WORKING] EXACT src/Orders/OrderService.cs -> OrderService.CancelAsync(Guid orderId)
 ```
 
-O objetivo é **consciência compartilhada**, não locking autoritário.
+The goal is shared awareness, not authoritarian locking. To see every active overlap in the project,
+use the dashboard or `GET /api/snapshot`.
 
-O aviso na CLI cobre quem está escrevendo naquele momento. Para ver todas as sobreposições ativas do projeto de uma vez, use o dashboard ou `GET /api/snapshot`.
+## Work Queue, Runner And Scheduling
 
-## Fila de trabalho, runner e agendamento
-
-Uma mensagem se perde se ninguém ler; uma **tarefa** fica na fila até alguém reivindicar e concluir. É a forma de delegar trabalho que **sobrevive à sessão** — inclusive entre ferramentas diferentes (Claude Code, Codex, Cursor) no mesmo repositório.
+A task stays in the queue until an agent claims and finishes it. Tasks are the durable way to
+delegate work across sessions and tools:
 
 ```bash
-agent-memory task create --agent AGENT-01 --title "Documentar parseArgs" \
-  --detail "Explicar a nova ordem de flags" --pointer "README.md"
-agent-memory task create --agent AGENT-01 --title "Revisar auth" --for AGENT-02
+agent-memory task create --agent AGENT-01 --title "Document parseArgs" \
+  --detail "Explain the new flag order" --pointer "README.md"
+agent-memory task create --agent AGENT-01 --title "Review auth" --for AGENT-02
 
 agent-memory task list [--status OPEN] [--json]
 agent-memory task claim --agent AGENT-02
-agent-memory task done --id T-XXXX --message "README atualizado"
-agent-memory task fail --id T-XXXX --message "faltou credencial"
+agent-memory task done --id T-XXXX --message "README updated"
+agent-memory task fail --id T-XXXX --message "missing credential"
 ```
 
-Uma tarefa com `--for` só pode ser reivindicada pelo agente indicado, e chega também na caixa de entrada dele. Ao terminar, quem pediu recebe o resultado — inclusive quando falha.
+### Review Gates
 
-### Quem faz e quem confere
-
-`--review-by` separa quem executa de quem julga. A revisão é criada **junto** com o trabalho e fica bloqueada até ele terminar, então nenhum trabalho fecha sozinho:
+`--review-by` separates implementation from judgment:
 
 ```bash
 agent-memory task create --agent LEAD --for DEV --review-by QA \
-  --title "Implementar mediana(lista)" --detail "..."
+  --title "Implement median(list)" --detail "..."
 ```
 
-Se a revisão reprovar, o trabalho volta para a fila com a objeção anexada ao `detail` — quem repegar começa da objeção, não do zero — e **uma nova revisão é enfileirada** para a próxima rodada. O portão não abre depois da primeira rejeição.
+If review fails, the work returns to the queue with the objection appended to `detail`, and a fresh
+review is queued for the next round.
 
-Quando qualquer agente capaz pode conferir, use `--review` para deixar a revisão aberta. Para trabalho caro de errar, `--reviewers N` cria um painel aberto de 1 a 9 revisores e decide por maioria:
+When any capable agent may review, use `--review`. For expensive or risky work, use `--reviewers N`
+to create an open panel of 1 to 9 reviewers and decide by majority:
 
 ```bash
 agent-memory task create --agent LEAD --for DEV --reviewers 3 \
-  --title "Migrar cobrança" --detail "Precisa de maioria antes de fechar"
+  --title "Migrate billing" --detail "Requires a majority before closing"
 ```
 
-Cada assento do painel precisa ser reivindicado por um agente diferente, e o executor nunca recebe a revisão do próprio trabalho. Se a maioria reprovar, os assentos restantes são cancelados e o trabalho volta para a fila; se um painel par empatar, o resultado conta como não aprovado.
+Each panel seat must be claimed by a different agent, and the implementer can never review its own
+work. If a majority rejects, undecided seats are cancelled and the work returns to the queue.
 
-`maxReviewRounds` (padrão 3) impede que executor e revisor que não se entendem troquem rejeições para sempre: passado o limite o trabalho falha para decisão humana.
+### Split Work And Join It Back
 
-Um revisor que **morre** (limite de sessão, rede, crash) não conta como reprovação: como o veredito veio do código de saída e não do agente, a revisão volta para a fila em vez de devolver trabalho correto.
-
-### Dividir uma demanda e juntar de volta
-
-`--depends-on` mantém uma tarefa fora da fila até que **todas** as suas dependências estejam `DONE`. É o que permite quebrar uma demanda em partes isoladas, rodá-las em paralelo, e ter uma tarefa que só começa quando o conjunto chegou:
+`--depends-on` keeps a task out of the queue until all dependencies are `DONE`:
 
 ```bash
-# duas partes independentes, uma por agente
-# --json devolve a tarefa inteira; o id é o que --depends-on precisa
 id() { node -pe "JSON.parse(require('fs').readFileSync(0)).id"; }
-A=$(agent-memory task create --agent LEAD --for W1 --title "parte A" --json | id)
-B=$(agent-memory task create --agent LEAD --for W2 --title "parte B" --json | id)
+A=$(agent-memory task create --agent LEAD --for W1 --title "part A" --json | id)
+B=$(agent-memory task create --agent LEAD --for W2 --title "part B" --json | id)
 
-# a síntese só aparece na fila quando A e B terminarem
 agent-memory task create --agent LEAD --for REV --depends-on "$A,$B" \
-  --title "Conferir o conjunto"
+  --title "Review the combined result"
 ```
 
-Quem reivindica a síntese recebe **os resultados das partes junto com o claim** — sem isso o agente receberia a pergunta com as respostas escondidas. Uma parte que falha mantém a síntese bloqueada: não há o que sintetizar de trabalho que não aconteceu.
-
-Um `--depends-on` para um id inexistente é recusado na criação: ele nunca ficaria `DONE`, então a tarefa esperaria para sempre parecendo saudável na listagem.
+The agent claiming the synthesis receives the results of the completed parts along with the claim.
 
 ### Runner
 
-O runner reivindica tarefas e executa um comando por tarefa:
-
 ```bash
-agent-memory run --agent AGENT-03 --exec "meu-script.sh" --once
-agent-memory run --agent AGENT-03 --exec "claude -p \"$AGENT_TASK_DETAIL\""   # loop contínuo
+agent-memory run --agent AGENT-03 --exec "my-script.sh" --once
+agent-memory run --agent AGENT-03 --exec "claude -p \"$AGENT_TASK_DETAIL\""
 ```
 
-**O conteúdo da tarefa nunca entra na string do comando.** Título, detalhe e ponteiro chegam por variáveis de ambiente:
+Task content never enters the command string. Title, detail and pointer arrive through environment
+variables:
 
 ```text
 AGENT_ID  AGENT_MEMORY_ROOT  AGENT_TASK_ID  AGENT_TASK_TITLE
@@ -409,70 +427,53 @@ AGENT_TASK_DETAIL  AGENT_TASK_POINTER  AGENT_TASK_POINTER_FILE
 AGENT_TASK_DEPTH  AGENT_TASK_ATTEMPT
 ```
 
-O motivo é direto: o título é escrito por outro agente. Interpolá-lo no comando deixaria texto enfileirado virar código. Apenas `{{task_id}}` e `{{task_depth}}` são substituídos no comando, porque têm charset validado e não podem carregar sintaxe de shell — o que também evita a armadilha de escrever `$AGENT_TASK_ID` num comando que roda sob `cmd.exe` no Windows.
+Exit 0 completes the task. Any other exit code marks it `FAILED` and stores output. A stuck command
+is killed by `--timeout` together with its process tree.
 
-O comando roda com `cwd` na raiz do projeto, então use `--root .` ao chamar a própria CLI de dentro dele.
-
-Exit 0 conclui a tarefa; qualquer outro código a marca como `FAILED`, guardando a saída. Um comando travado é morto por `--timeout` (padrão: a duração do claim), **junto com toda a árvore de processos** — matar só o shell deixaria o comando real vivo como neto.
-
-### Executores prontos
-
-Escrever o executor do zero é o passo mais chato. O projeto traz dois:
+### Ready-To-Use Executors
 
 ```bash
-# CLI de agente que le stdin (claude -p e afins)
 TASK_AGENT_CMD="claude -p" \
   agent-memory run --agent WORKER --exec "node examples/task-agent.mjs"
 
-# modelo local via API do Ollama
 agent-memory run --agent WORKER --exec "node examples/task-agent-ollama.mjs"
 ```
 
-Ambos leem a tarefa do ambiente, escrevem o entregável em `outputs/<id>.md` e saem com 0 ou 1, que é o que a fila usa para marcar `DONE` ou `FAILED`.
+Both read the task from the environment, write the deliverable to `outputs/<id>.md`, and exit 0 or
+1 so the queue can mark the task `DONE` or `FAILED`.
 
-O `task-agent.mjs` entrega o prompt pelo **stdin** do agente, não por argumento: título e detalhe são escritos por outro agente, e stdin não tem regras de quoting nem metacaracteres para atrapalhar. Ele também aceita `TASK_AGENT_DELEGATE=1`, e aí o agente decide se divide a tarefa e enfileira filhas com `--parent` — a profundidade é imposta pela fila, não pela boa vontade do modelo.
-
-> Um CLI que **anima a saída** (spinner, redesenho de linha) não sobrevive a um pipe: o texto capturado vem com pedaços de linhas meio desenhadas. Foi por isso que a versão do Ollama usa a API HTTP em vez de `ollama run`. Se o seu agente tiver modo não-interativo ou API, prefira.
-
-### Agendamento
+### Scheduling
 
 ```bash
 agent-memory schedule create --agent AGENT-01 --cron "0 9 * * 1-5" \
-  --title "Varredura diaria de dependencias"
+  --title "Daily dependency scan"
 agent-memory schedule list
-agent-memory scheduler --interval 30       # daemon
-agent-memory scheduler --once              # uma passada, para Task Scheduler/cron do SO
+agent-memory scheduler --interval 30
+agent-memory scheduler --once
 ```
 
-Cron de 5 campos com `*`, `n`, `a-b`, `a,b,c` e passos. Quando ambos os campos de dia estão restritos, basta um casar — o comportamento padrão do cron. Vários schedulers podem rodar juntos: a varredura inteira é serializada e o `nextRunAt` é reavaliado dentro do lock, então um horário nunca dispara duas vezes.
+The cron parser supports five fields with `*`, `n`, `a-b`, `a,b,c` and steps. Multiple schedulers
+can run together because due schedule materialization is serialized under a lock.
 
-### Limites contra spawn descontrolado
+### Limits Against Runaway Spawning
 
-Um agente que cria tarefas pode criar um agente que cria tarefas. Toda tarefa criada **durante a execução de outra** herda profundidade + 1, e passar de `maxTaskDepth` (padrão 3) é recusado:
+Any task created during another task inherits depth + 1, and exceeding `maxTaskDepth` rejects it.
+The default is 3. A claim expires after `taskClaimSeconds`, defaulting to 900 seconds; if the runner
+dies, the task returns to the pool with an incremented attempt count.
 
-```text
-T-...52278 | DONE   | depth 0 | auditoria de dependencias
-T-...IO9739 | DONE   | depth 1 | corrigir o que a auditoria achou
-T-...NF910 | DONE   | depth 2 | corrigir o que a auditoria achou
-T-...V8CFF9 | FAILED | depth 3 | Task depth limit reached (3)
-```
+## Git Watcher
 
-O servidor MCP fecha esse ciclo sozinho: quando iniciado por um runner, ele lê `AGENT_TASK_ID` do próprio ambiente e usa como pai de qualquer tarefa criada. O modelo não precisa saber que existe profundidade.
-
-Um claim expira depois de `taskClaimSeconds` (padrão 900). Se o runner morrer no meio, a tarefa volta para a fila com o número de tentativas incrementado, em vez de ficar presa.
-
-## Watcher de Git
-
-O restante do sistema confia no autorrelato do agente. O watcher lê o working tree e compara com o que foi declarado:
+The watcher compares the Git working tree with declared agent intent:
 
 ```bash
-agent-memory watch                 # acompanha continuamente
+agent-memory watch
 agent-memory watch --interval 5
-agent-memory watch --once          # uma passada e sai
-agent-memory watch --dry-run       # reporta sem gravar nada
+agent-memory watch --once
+agent-memory watch --dry-run
 ```
 
-Cada arquivo alterado é atribuído ao agente que aponta para ele — pelo ponteiro atual ou, se o agente já seguiu adiante, pelo journal recente:
+Each changed file is attributed to the agent pointing at it, either through the current pointer or
+the recent journal:
 
 ```text
 AGENT-01               src/Auth.cs (modified +2/-0)
@@ -480,133 +481,86 @@ UNDECLARED             src/Orders.cs (modified +1/-0)
 AMBIGUOUS(A-01|A-02)   src/Shared.cs (modified +3/-1)
 ```
 
-A atribuição é conservadora de propósito: só existe dono quando **exatamente um** agente reivindica o arquivo. Com zero ou vários, o watcher reporta `UNDECLARED`/`AMBIGUOUS` em vez de chutar.
+Attribution is deliberately conservative. Ownership exists only when exactly one agent claims the
+file. The `.agents/` directory is always ignored.
 
-Os achados entram no journal como eventos `OBSERVED`. Duas garantias importantes:
-
-- o watcher **nunca altera o estado de um agente** — uma observação não sobrescreve o que o agente declarou estar fazendo;
-- alterações sem dono não entram no histórico de ninguém, para que o histórico individual continue sendo o registro do que aquele agente de fato declarou.
-
-O diretório `.agents/` é sempre ignorado.
-
-Em modo contínuo, as alterações já existentes na largada viram baseline e não são reportadas. Com `--once` não há baseline: tudo que estiver no working tree é avaliado, e o comando **sai com código 1 se houver alterações não declaradas** — o que serve como verificação em CI ou em hook de pre-commit.
-
-## Dashboard local
+## Local Dashboard
 
 ```bash
 agent-memory serve
 ```
 
-Abra:
+Open:
 
 ```text
 http://127.0.0.1:4317
 ```
 
-O painel é atualizado por push via SSE: o servidor observa o `.agents/` e envia um snapshot novo **apenas quando algo muda**. Não há recarregamento de página, então o scroll, o foco e o filtro são preservados, e um projeto parado não gera tráfego.
-
-O painel mostra:
-
-- os agentes, com status efetivo (`OFFLINE` quando o heartbeat vence), demanda, ação atual e ponteiro;
-- um alerta com **todas** as sobreposições ativas do painel, e as linhas envolvidas destacadas — antes o conflito só aparecia para quem estava escrevendo naquele instante;
-- o feed de atividade recente;
-- um filtro por agente, demanda, arquivo ou símbolo.
+The dashboard updates through SSE and shows agents, effective status, current tasks, active
+overlaps, recent activity and inbox counts.
 
 Endpoints:
 
 ```text
-GET /events         stream SSE de snapshots
-GET /api/snapshot   mesmo payload, uma vez
-GET /api/status     estado dos agentes (formato original)
+GET /events         SSE snapshot stream
+GET /api/snapshot   same payload, once
+GET /api/status     agent state in the original format
 GET /api/memory     SHARED_MEMORY.md
 ```
 
-## Servidor MCP
+## MCP Server
 
-Em vez de fazer o agente chamar a CLI por shell, exponha a memória como ferramentas nativas via MCP (stdio):
-
-```bash
-agent-memory mcp --root /caminho/meu-backend
-```
-
-Sem `--root`, o diretório atual é usado. O `.agents/` precisa já existir (`agent-memory init`); as ferramentas recusam escrever antes disso em vez de criar um `.agents/` no lugar errado.
-
-### Identidade fixa (recomendado)
-
-Passe `--agent` para amarrar o servidor a um id:
+Expose memory as native MCP tools over stdio:
 
 ```bash
-agent-memory mcp --root /caminho/meu-backend --agent AGENT-01
+agent-memory mcp --root /path/to/my-backend
+agent-memory mcp --root /path/to/my-backend --agent AGENT-01
 ```
 
-Com isso:
+With a pinned `--agent` id, the server registers or reattaches that agent at startup, removes the
+`agent` parameter from tool schemas, and prevents caller-side impersonation.
 
-- o agente é registrado (ou reanexado) na largada, sem o modelo precisar chamar `memory_register`;
-- o parâmetro `agent` **some de todas as ferramentas** — `memory_record` passa a exigir só `type` e `message`;
-- o id não pode ser forjado: passar `agent` de outro na chamada não redireciona a escrita.
-
-Sem isso, cada agente teria que inventar e lembrar o próprio id em toda chamada — e dois deles escolhendo `AGENT-01` compartilhariam estado sem ninguém perceber.
-
-### Configuração no cliente
-
-A maioria dos clientes MCP (Claude Code, Codex, Cursor) usa o mesmo formato. Em `.mcp.json` na raiz do projeto — **um id diferente por agente**:
+Most MCP clients use this `.mcp.json` shape:
 
 ```json
 {
   "mcpServers": {
     "agent-memory": {
       "command": "agent-memory",
-      "args": ["mcp", "--root", "/caminho/meu-backend", "--agent", "AGENT-01"]
+      "args": ["mcp", "--root", "/path/to/my-backend", "--agent", "AGENT-01"]
     }
   }
 }
 ```
 
-No Claude Code também é possível registrar pela CLI:
+### Exposed Tools
 
-```bash
-claude mcp add agent-memory -- agent-memory mcp --root /caminho/meu-backend --agent AGENT-01
-```
-
-### Rodando vários agentes
-
-```bash
-cd /caminho/meu-backend
-agent-memory init --name "Meu Backend"
-agent-memory serve            # painel em http://127.0.0.1:4317
-```
-
-Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `--agent`: `AGENT-01`, `AGENT-02`, `AGENT-03`. Nada mais precisa ser coordenado — o `.agents/` é o ponto de encontro, e a detecção de sobreposição, as mensagens e o painel funcionam entre processos independentes.
-
-### Ferramentas expostas
-
-| Ferramenta | Uso |
+| Tool | Use |
 | --- | --- |
-| `memory_status` | Estado atual de todos os agentes. Aceita `pointer` para checar sobreposição **antes** de anunciar a intenção. |
-| `memory_read` | `SHARED_MEMORY.md` completo. |
-| `memory_read_pointer` | Lê **só o símbolo** que o ponteiro nomeia, não o arquivo inteiro. Ver [Ler pelo ponteiro](#ler-pelo-ponteiro). |
-| `memory_register` | Registra o agente. Se o id já existe, reanexa em vez de falhar — seguro em reconexões. |
-| `memory_record` | Um passo do ciclo, via `type`: `INTENT`, `READING`, `FOUND`, `CHANGED`, `CREATED`, `TESTING`, `WAITING`, `NOTE`, `DONE`. Retorna as sobreposições detectadas. |
-| `memory_task_create` | Enfileira trabalho durável para outro agente. |
-| `memory_task_list` | Lista a fila. |
-| `memory_task_claim` | Reivindica a tarefa mais antiga disponível. |
-| `memory_task_finish` | Fecha a tarefa com DONE, FAILED ou CANCELLED. |
-| `memory_send` | Envia mensagem para a caixa de outro agente. |
-| `memory_inbox` | Lê as mensagens do agente. Aceita `peek` e `all`. |
-| `memory_heartbeat` | Atualiza a presença em trechos longos sem registro. |
-| `memory_log` | Últimos eventos do journal global, opcionalmente filtrados por agente. |
+| `memory_status` | Current state of all agents. Accepts `pointer` to check overlap before declaring intent. |
+| `memory_read` | Full `SHARED_MEMORY.md`. |
+| `memory_read_pointer` | Reads only the symbol named by a pointer, not the full file. |
+| `memory_register` | Registers or reattaches an agent. |
+| `memory_record` | Records `INTENT`, `READING`, `FOUND`, `CHANGED`, `CREATED`, `TESTING`, `WAITING`, `NOTE` or `DONE`. |
+| `memory_task_create` | Queues durable work for another agent. |
+| `memory_task_list` | Lists the queue. |
+| `memory_task_claim` | Claims the oldest available task. |
+| `memory_task_finish` | Closes a task as DONE, FAILED or CANCELLED. |
+| `memory_send` | Sends a message to another agent. |
+| `memory_inbox` | Reads an agent inbox. Supports `peek` and `all`. |
+| `memory_heartbeat` | Refreshes presence during long work. |
+| `memory_log` | Reads recent global journal events, optionally filtered by agent. |
 
-O handshake `initialize` já devolve o protocolo (`READ -> INTENT -> CODE -> RESULT`) no campo `instructions`, então o agente recebe as regras sem precisar do `AGENT_PROTOCOL.md` no system prompt.
+The `initialize` handshake returns the protocol instructions, so the agent receives the
+`READ -> INTENT -> CODE -> RESULT` rule without needing `AGENT_PROTOCOL.md` in the system prompt.
 
-O transporte é JSON-RPC 2.0 sobre stdio, implementado direto no projeto — sem dependências de runtime. `stdout` pertence ao protocolo; diagnósticos vão para `stderr`.
-
-## Formato de ponteiro
+## Pointer Format
 
 ```text
-arquivo::símbolo::parâmetro
+file::symbol::parameter
 ```
 
-Exemplos:
+Examples:
 
 ```text
 src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)
@@ -614,113 +568,93 @@ src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId
 src/Customers/CustomerRepository.cs
 ```
 
-O sistema normaliza barras e compara arquivo + símbolo para detectar sobreposição.
+`memory_read_pointer` returns the named symbol instead of the whole file. Extraction is heuristic,
+not a full parser: balanced braces for C-like languages, indentation for Python, and no result
+instead of a confident wrong slice when the symbol is not found. Reads are resolved under the
+project root.
 
-### Ler pelo ponteiro
+## Prompt Protocol
 
-O ponteiro não serve só para detectar conflito: `memory_read_pointer` devolve **o símbolo, não o arquivo**, com comentário de doc e as linhas de onde veio.
-
-```text
-memory_read_pointer  pointer="src/core/config.ts::DEFAULT_CONFIG"
-
-src/core/config.ts:6-16 (DEFAULT_CONFIG)
-
-export const DEFAULT_CONFIG: ProjectConfig = {
-  version: 1,
-  ...
-};
-```
-
-Em `src/mcp/tools.ts` a diferença é 27.127 caracteres contra 2.160 — **92% menos leitura para a mesma resposta**.
-
-Isso deixa de ser conforto e passa a ser condição de funcionamento em modelo pequeno. Um 7B local, perguntado quais campos de `ProjectConfig` não têm valor em `DEFAULT_CONFIG` lendo os dois arquivos inteiros, esgotou 14 turnos em 105s sem responder. Com o recorte, respondeu em 2 turnos e 10s. O gargalo era a leitura, não o modelo.
-
-A extração é heurística, não parser: chaves balanceadas para a família C, recuo para Python, e **nada** em vez de um palpite quando o símbolo não é encontrado — um recorte confiante da função errada é pior que recorte nenhum. Chaves dentro de string e de comentário não contam, e uma chamada não é confundida com a declaração.
-
-Leituras são resolvidas sob a raiz do projeto e comparadas depois de resolvidas: o ponteiro vem de um modelo, e um modelo mal instruído pede `../../.ssh/id_rsa`.
-
-O mesmo recorte está disponível para executores locais como a ferramenta `read_pointer` em `examples/task-agent-local.mjs`.
-
-## Protocolo para colocar no prompt de cada agente
-
-Use o conteúdo de `AGENT_PROTOCOL.md` no system prompt/instructions do agente. A regra principal é:
-
-> READ -> INTENT -> CODE -> RESULT -> READ
-
-Isso mantém os agentes conscientes do que os outros estão fazendo.
-
-Via MCP isso é opcional: o servidor já entrega o protocolo no `initialize`, e o `AGENT_PROTOCOL.md` traz a tabela de equivalência entre comandos e ferramentas.
-
-## Comandos
+Use [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md) in each agent's system prompt or instructions when MCP is
+not available. The main rule is:
 
 ```text
-init        Inicializa .agents/
-register    Registra um agente e abre seu histórico (--force reinicia a sessão)
-unregister  Remove o agente do painel, mantendo o histórico
-status      Mostra estado resumido dos agentes
-memory      Imprime SHARED_MEMORY.md
-log         Lista os eventos mais recentes do journal
-send        Envia mensagem para a caixa de outro agente
-inbox       Lê as mensagens endereçadas ao agente
-heartbeat   Atualiza presença do agente
-intent      Declara o que será feito antes da alteração
-reading     Registra leitura/análise de código
-found       Registra descoberta relevante
-changed     Registra código alterado
-created     Registra código/arquivo criado
-testing     Registra testes em andamento/concluídos
-waiting     Registra dependência/espera
-note        Registra observação operacional
-done        Finaliza a demanda/ação
-task        Enfileira, lista, reivindica e conclui trabalho
-schedule    Cria e lista agendamentos cron
-run         Runner: reivindica tarefas e executa um comando por tarefa
-scheduler   Materializa tarefas dos agendamentos vencidos
-config      Consulta/altera configuração
-compact     Arquiva journal e históricos antigos
-watch       Compara o working tree do Git com o que foi declarado
-serve       Abre dashboard local
-mcp         Servidor MCP em stdio
+READ -> INTENT -> CODE -> RESULT -> READ
 ```
 
-## Concorrência
+With MCP, this is optional because the server returns the protocol during `initialize`.
 
-Cada agente roda no seu próprio processo, escrevendo no mesmo `.agents/`.
+## Commands
 
-- Cada `state/AGENT-X.json` é escrito atomicamente.
-- Cada histórico individual possui lock próprio.
-- O `events.jsonl` possui lock global curto somente no append.
-- `SHARED_MEMORY.md` é regenerado sob lock e escrito atomicamente.
-- Os agentes nunca precisam editar o arquivo central manualmente.
-- Um lock deixado para trás por um processo morto é recuperado após 30 segundos, em vez de travar o `.agents/` até alguém apagar o arquivo na mão.
-- Contenção de lock é tratada como espera, não como erro. No Windows, um arquivo em *pending-delete* ou aberto por outro leitor retorna `EPERM`/`EACCES`/`EBUSY` em vez de `EEXIST`; tratar isso como falha derruba o agente exatamente sob carga. O `rename` da escrita atômica tem a mesma proteção, e o arquivo temporário é removido se ainda assim falhar.
-- **A regeneração do painel nunca derruba a escrita que a precede.** `state/` e `events.jsonl` são gravados antes e são a fonte da verdade; o `SHARED_MEMORY.md` é derivado. Se o lock do painel estiver muito disputado, a escrita permanece durável e o próximo agente regenera a partir do disco.
+```text
+init        Initialize .agents/
+register    Register an agent and open its history (--force starts a new session)
+unregister  Remove an agent from the panel while preserving history
+status      Show a compact agent status table
+memory      Print SHARED_MEMORY.md
+log         List recent journal events
+send        Send a message to another agent
+inbox       Read messages addressed to an agent
+heartbeat   Refresh agent presence
+intent      Declare planned work before editing
+reading     Record code reading or analysis
+found       Record a relevant finding
+changed     Record changed code
+created     Record created code/files
+testing     Record tests in progress or completed
+waiting     Record a dependency or wait
+note        Record an operational note
+done        Finish the current task/action
+task        Queue, list, claim and finish work
+schedule    Create and list cron schedules
+run         Runner: claim tasks and execute one command per task
+scheduler   Materialize due scheduled tasks
+config      Read or update configuration
+compact     Archive old journal and history data
+watch       Compare Git working tree changes with declared intent
+serve       Start the local dashboard
+mcp         Start the stdio MCP server
+```
 
-Medido em processos concorrentes de verdade, do zero até 40 agentes × 25 atividades (1.040 eventos): nenhum evento perdido, nenhum arquivo corrompido, nenhum histórico contaminado, nenhum lock preso, e o painel permanecendo em dia. A vazão sob 40 processos simultâneos ficou em torno de 60 escritas/s — o `refreshSharedMemory` serializa no lock global, que é o teto de escala.
+## Concurrency
 
-Para referência, `status` e o dashboard leem `state/` diretamente, então mostram o estado corrente mesmo que o `SHARED_MEMORY.md` esteja momentaneamente atrás.
+Each agent runs in its own process and writes to the same `.agents/` directory.
 
-## Testes
+- Each `state/AGENT-X.json` write is atomic.
+- Each individual history has its own lock.
+- `events.jsonl` uses a short global lock only for appends.
+- `SHARED_MEMORY.md` is regenerated under lock and written atomically.
+- Agents never need to edit the central file manually.
+- Abandoned locks are recovered after 30 seconds.
+- Lock contention is treated as waiting, not failure.
+- Dashboard regeneration never invalidates the write that came before it.
+
+Measured with real concurrent processes, from zero to 40 agents x 25 activities, the project kept
+1,040 events without lost events, corrupted files, contaminated histories or stuck locks. Throughput
+under 40 simultaneous processes was around 60 writes/s.
+
+## Tests
 
 ```bash
 npm test
 ```
 
-## Exemplo automático
+## Automatic Example
 
 ```bash
 npm run example
 ```
 
-O exemplo cria um projeto temporário, registra três agentes e simula conflito e dependência.
+The example creates a temporary project, registers three agents and simulates conflict and
+dependency.
 
-## Evoluções possíveis
+## Possible Future Work
 
-- plugin de VS Code;
-- referência por AST/LSP em vez de somente strings semânticas;
-- detecção de dependências entre símbolos;
-- integração com worktrees e branches.
+- VS Code extension;
+- AST/LSP pointer resolution instead of semantic strings only;
+- dependency detection between symbols;
+- worktree and branch integration.
 
-## Licença
+## License
 
 MIT.

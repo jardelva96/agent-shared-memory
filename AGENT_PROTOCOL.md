@@ -1,10 +1,12 @@
 # Agent Shared Memory Protocol
 
-Você é um agente de programação trabalhando simultaneamente com outros agentes no mesmo repositório.
+[Português](AGENT_PROTOCOL.pt-BR.md)
 
-## Regra obrigatória
+You are a coding agent working concurrently with other agents in the same repository.
 
-Siga continuamente o ciclo:
+## Required Rule
+
+Continuously follow this cycle:
 
 ```text
 READ -> INTENT -> CODE -> RESULT -> READ
@@ -12,129 +14,145 @@ READ -> INTENT -> CODE -> RESULT -> READ
 
 ### READ
 
-Antes de uma alteração relevante, consulte:
+Before a meaningful change, check:
 
 ```bash
 agent-memory status
 ```
 
-ou:
+or:
 
 ```bash
 agent-memory memory
 ```
 
-Observe especialmente agentes trabalhando no mesmo arquivo, classe, método, contrato ou dependência.
+Pay special attention to agents working on the same file, class, method, contract or dependency.
 
 ### INTENT
 
-Antes de modificar código, registre uma descrição curta e precisa (idealmente 1-3 linhas):
+Before editing code, record a short and precise description, ideally 1-3 lines:
 
 ```bash
 agent-memory intent \
-  --agent <SEU_ID> \
-  --task <DEMANDA> \
-  --pointer "arquivo::simbolo::parametro" \
-  --message "o que será alterado" \
-  --reason "por que será alterado"
+  --agent <YOUR_ID> \
+  --task <TASK> \
+  --pointer "file::symbol::parameter" \
+  --message "what will change" \
+  --reason "why it will change"
 ```
 
-Nunca anuncie uma intenção genérica como "melhorar backend". Diga exatamente o componente e a alteração planejada.
+Never announce vague intent such as "improve backend". Name the exact component and planned change.
 
 ### CODE
 
-Faça somente a alteração anunciada. Se o plano mudar materialmente, publique um novo `intent` antes da nova alteração.
+Make only the change you announced. If the plan changes materially, publish a new `intent` before
+the new change.
 
 ### RESULT
 
-Imediatamente após a alteração, registre o resultado usando `changed`, `created`, `testing`, `found`, `waiting` ou `done`.
+Immediately after the change, record the result with `changed`, `created`, `testing`, `found`,
+`waiting` or `done`.
 
-Exemplo:
+Example:
 
 ```bash
 agent-memory changed \
-  --agent <SEU_ID> \
-  --pointer "arquivo::simbolo" \
-  --message "resultado exato e resumido"
+  --agent <YOUR_ID> \
+  --pointer "file::symbol" \
+  --message "exact short result"
 ```
 
-### CONFLITOS
+### CONFLICTS
 
-Se o comando indicar sobreposição com outro agente:
+If a command reports overlap with another agent:
 
-1. leia a memória desse agente;
-2. não desfaça mudanças feitas por ele;
-3. ajuste sua implementação para coexistir quando possível;
-4. se depender dele, registre `waiting --for AGENT-X` — isso avisa o agente diretamente;
-5. se a alteração ainda puder ser feita sem conflito semântico, prossiga e documente isso.
+1. read that agent's memory;
+2. do not undo changes made by that agent;
+3. adjust your implementation to coexist when possible;
+4. if you depend on that agent, record `waiting --for AGENT-X`, which notifies it directly;
+5. if your change can still be made without a semantic conflict, proceed and document that.
 
-### HISTÓRICO
+### HISTORY
 
-Nunca edite manualmente:
+Never edit these files manually:
 
 ```text
 .agents/SHARED_MEMORY.md
-.agents/history/OUTRO-AGENTE.md
+.agents/history/OTHER-AGENT.md
 ```
 
-Seu histórico é gerenciado pelos comandos da ferramenta.
+Your own history is managed by the tool commands.
 
-### PONTEIROS
+### POINTERS
 
-Prefira:
+Prefer semantic pointers:
 
 ```text
 src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)
 ```
 
-Evite números de linha, pois mudam durante edições concorrentes.
+Avoid line numbers because they move during concurrent edits.
 
-### MENSAGENS
+### MESSAGES
 
-Outros agentes podem lhe enviar mensagens, e uma dependência declarada com `waiting --for` chega diretamente na sua caixa.
+Other agents can send you messages, and a dependency declared with `waiting --for` arrives directly
+in your inbox.
 
-O `status` mostra quantas mensagens você tem sem ler. Ao ver mensagens não lidas, leia antes de continuar:
+`status` shows how many unread messages you have. If you see unread messages, read them before
+continuing:
 
 ```bash
-agent-memory inbox --agent <SEU_ID>
+agent-memory inbox --agent <YOUR_ID>
 ```
 
-Para avisar outro agente sobre algo que afeta o trabalho dele:
+To notify another agent about something that affects its work:
 
 ```bash
 agent-memory send \
-  --from <SEU_ID> \
+  --from <YOUR_ID> \
   --to AGENT-02 \
-  --message "resultado exato e resumido" \
-  --pointer "arquivo::simbolo"
+  --message "exact short result" \
+  --pointer "file::symbol"
 ```
 
-Não envie um aviso manual duplicando um `waiting` — a dependência já notifica sozinha.
+Do not send a manual notice duplicating `waiting`; the dependency already notifies the target.
 
 ### HEARTBEAT
 
-Em sessões longas sem atividade registrada, execute periodicamente:
+During long sessions with no recorded activity, periodically run:
 
 ```bash
-agent-memory heartbeat --agent <SEU_ID>
+agent-memory heartbeat --agent <YOUR_ID>
 ```
 
-## Via MCP
+### FILES AND EDITS
 
-Se o servidor MCP estiver conectado, use as ferramentas em vez dos comandos de shell. O ciclo é o mesmo.
+- Reserve the files you are about to change: `agent-memory reserve --agent <YOUR_ID> src/auth/`
+  (or `memory_reserve`). A file another agent reserved is theirs until it is released or expires;
+  pick other work or ask them with `send`.
+- Change one function, method or class with `memory_replace_symbol` instead of rewriting the
+  file. It re-reads the file when it writes, so other agents' changes survive, and it refuses a
+  change that would break the file's syntax.
+- Release your reservations when you are done (`release`, or `memory_release`).
 
-| Comando CLI | Ferramenta MCP |
+## MCP
+
+If the MCP server is connected, use tools instead of shell commands. The cycle is the same.
+
+| CLI command | MCP tool |
 | --- | --- |
 | `status` | `memory_status` |
 | `memory` | `memory_read` |
 | `register` | `memory_register` |
-| `intent`, `changed`, `created`, `testing`, `found`, `waiting`, `note`, `done` | `memory_record` com o `type` correspondente |
+| `intent`, `changed`, `created`, `testing`, `found`, `waiting`, `note`, `done` | `memory_record` with the matching `type` |
 | `send` | `memory_send` |
 | `inbox` | `memory_inbox` |
 | `heartbeat` | `memory_heartbeat` |
-| — | `memory_log` (journal global de eventos) |
+| - | `memory_log` |
 
-Duas diferenças úteis no modo MCP:
+Two MCP details are useful:
 
-- `memory_status` aceita `pointer`, permitindo checar sobreposição em um símbolo específico **antes** de anunciar a intenção;
-- `memory_register` reanexa o agente se o id já existir, então pode ser chamado a cada reconexão.
+- `memory_status` accepts `pointer`, so you can check overlap on a specific symbol before declaring
+  intent;
+- `memory_register` reattaches the agent if the id already exists, so it can be called on every
+  reconnection.
