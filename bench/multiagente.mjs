@@ -33,7 +33,8 @@ const ALL_AGENTS = [
   { id: 'GPTOSS', provider: 'groq', model: 'openai/gpt-oss-120b' },
   { id: 'QWEN', provider: 'groq', model: 'qwen/qwen3.8-27b' },
   { id: 'NEMOTRON', provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
-  { id: 'NORTH', provider: 'openrouter', model: 'cohere/north-mini-code:free' }
+  { id: 'NORTH', provider: 'openrouter', model: 'cohere/north-mini-code:free' },
+  { id: 'LIGHTNING', provider: 'openrouter', model: 'nvidia/nemotron-3.5-lightning:free' }
 ];
 const pick = arg('agents', '');
 const AGENTS = pick ? ALL_AGENTS.filter(a => pick.split(',').includes(a.id)) : ALL_AGENTS;
@@ -60,7 +61,7 @@ async function prepare(cond) {
   const ids = {};
   for (const t of tarefas) {
     const args = ['task', 'create', '--agent', 'LEAD', '--title', `[${t.id}] ${t.title}`, '--detail', t.spec, '--pointer', `${t.file}::${t.symbol}`, '--json'];
-    if (cond === 'revisao') args.push('--review');
+    if (cond === 'revisao' || cond.endsWith('_revisao')) args.push('--review');
     if (t.dependsOn) args.push('--depends-on', t.dependsOn.map(d => ids[d]).join(','));
     ids[t.id] = JSON.parse(memory(root, ...args)).id;
   }

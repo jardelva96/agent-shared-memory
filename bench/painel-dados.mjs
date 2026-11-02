@@ -118,7 +118,7 @@ fig('eco_leu_inteiro_ponteiro', parseFloat(eco.geral.ponteiro.leuArquivoInteiro)
 // Tests 2 and 3 -- the queue with several agents, graded by hidden tests.
 const lote = readdirSync(path.join(res, 'multiagente')).filter(d => existsSync(path.join(res, 'multiagente', d, 'resumo.json'))).sort().pop();
 const loteDir = path.join(res, 'multiagente', lote);
-const COND = { sem_memoria: 'Sem memória', solo: 'Com memória', revisao: 'Com memória + revisão', aviso: 'Com memória + aviso ao gravar', trava: 'Trava de leitura (sem memória)', simbolo: 'Edição por símbolo (versão nova)' };
+const COND = { sem_memoria: 'Sem memória', solo: 'Com memória', revisao: 'Com memória + revisão', aviso: 'Com memória + aviso ao gravar', trava: 'Trava de leitura (sem memória)', simbolo: 'Edição por símbolo (versão nova)', simbolo_revisao: 'Versão nova + revisão' };
 const tarefasRows = [];
 const condRows = [];
 let auditadas = 0;
@@ -265,6 +265,62 @@ if (v3('sem_memoria').length && v3('simbolo').length) {
   fig('v3_economia', +((a - b) / a).toFixed(4));
 }
 
+// The whole queue again with the new version: the same ten tasks, old way against new way.
+const v2Base = path.join(res, 'multiagente-v2');
+const v2Stamp = existsSync(v2Base) ? readdirSync(v2Base).filter(d => existsSync(path.join(v2Base, d, 'resumo.json'))).sort().pop() : undefined;
+const v2Rows = [];
+if (v2Stamp) {
+  for (const cond of ['sem_memoria', 'simbolo', 'simbolo_revisao']) {
+    const dir = path.join(v2Base, v2Stamp, cond);
+    if (!existsSync(path.join(dir, 'resultado.json'))) continue;
+    const { resumo, porTarefa } = json(path.join(dir, 'resultado.json'));
+    const runs = jsonl(path.join(dir, 'execucoes.jsonl'));
+    let entregues = 0, perfeitas = 0, pass = 0, total = 0, falsas = 0, aprov = 0, rejeicoes = 0;
+    for (const [id, t] of Object.entries(porTarefa)) {
+      if (!runs.some(r => r.workKey === id && !r.review && r.wrote)) continue;
+      entregues++;
+      pass += t.ocultosPass;
+      total += t.ocultosTotal;
+      if (t.perfeito) perfeitas++;
+      for (const v of t.vereditos ?? []) {
+        if (v.aprovou) {
+          aprov++;
+          if (!t.perfeito) falsas++;
+        } else rejeicoes++;
+      }
+    }
+    v2Rows.push({
+      condicao: COND[cond],
+      tarefas: resumo.tarefas,
+      entregues,
+      perfeitas,
+      acerto_entregues: share(pass, total),
+      apagadas: resumo.trabalhosApagados?.length ?? 0,
+      aprovacoes: aprov,
+      aprovacoes_erradas: falsas,
+      rejeicoes,
+      tokens: resumo.tokensTotal,
+      tokens_por_entregue: entregues ? Math.round(resumo.tokensTotal / entregues) : null
+    });
+  }
+}
+write('multiagente_v2', v2Rows);
+
+// Finding code nobody pointed at: a text search kit against the symbol kit.
+const descoberta = existsSync(path.join(res, 'descoberta-resumo.json')) ? json(path.join(res, 'descoberta-resumo.json')) : undefined;
+write(
+  'descoberta',
+  (descoberta?.porPergunta ?? []).map(p => ({ ...p, pergunta: ROTULO[p.pergunta] ?? p.pergunta }))
+);
+if (descoberta) {
+  fig('desc_pares', descoberta.pares);
+  fig('desc_economia', descoberta.economia);
+  fig('desc_certas_texto', descoberta.certasTexto);
+  fig('desc_certas_simbolo', descoberta.certasSimbolo);
+  fig('desc_tokens_texto', descoberta.tokensTexto);
+  fig('desc_tokens_simbolo', descoberta.tokensSimbolo);
+}
+
 // What the measuring found wrong in the system, and what was done about it.
 write('defeitos', [
   { n: 1, defeito: 'Um tipo usado numa assinatura ganhava da própria declaração', efeito: 'Pedir ToolDefinition devolvia a função buildTools: código errado, entregue com confiança', onde: 'Recorte (extract.ts)', situacao: 'Corrigido, com teste' },
@@ -275,7 +331,9 @@ write('defeitos', [
   { n: 6, defeito: 'Aviso de conflito chegava só para quem entrava no arquivo depois', efeito: 'Quem chegou primeiro gravou por cima e apagou o trabalho do outro', onde: 'Memória (service.ts)', situacao: 'Corrigido: agora avisa os dois e avisa a cada gravação' },
   { n: 7, defeito: 'Ponteiro para membro ignorava o dono (Tarefa.status)', efeito: 'Pedir uma propriedade trazia uma variável local de mesmo nome em outro método', onde: 'Recorte (extract.ts)', situacao: 'Corrigido: procura dentro do tipo primeiro, com teste' },
   { n: 8, defeito: 'Decorador na linha da declaração (@IsString() title!: string)', efeito: 'Propriedade decorada não era achada', onde: 'Recorte (extract.ts)', situacao: 'Corrigido, com teste' },
-  { n: 9, defeito: 'Agentes reescreviam o arquivo inteiro para mudar uma função', efeito: 'Cópia velha apagava o trabalho do outro agente no mesmo arquivo', onde: 'Ferramentas de edição', situacao: 'Novo: edição por símbolo, que relê o arquivo sob trava na hora de gravar' }
+  { n: 9, defeito: 'Agentes reescreviam o arquivo inteiro para mudar uma função', efeito: 'Cópia velha apagava o trabalho do outro agente no mesmo arquivo', onde: 'Ferramentas de edição', situacao: 'Novo: edição por símbolo, que relê o arquivo sob trava na hora de gravar' },
+  { n: 10, defeito: 'Edição que quebrava a sintaxe era gravada', efeito: 'Um agente escreveu uma regex sem a barra final e os testes dos dois agentes pararam de carregar', onde: 'Ferramentas de edição', situacao: 'Corrigido: recusada antes de gravar, com a linha do erro' },
+  { n: 11, defeito: 'Agente sem cota marcava a tarefa como falha', efeito: 'Código certo (10 de 10 testes) foi jogado fora porque a cota do dia acabou no meio', onde: 'Fila (runner)', situacao: 'Corrigido: saída 75 devolve a tarefa para outro agente' }
 ]);
 
 // The symbol outline against the compilers.
@@ -298,10 +356,13 @@ write('comparacao', [
   { recurso: 'Aviso automático quando outro agente grava o mesmo arquivo', nosso: S, beads: N, serena: N, agent_teams: N },
   { recurso: 'Ler código por função ou classe', nosso: S, beads: N, serena: S, agent_teams: P },
   { recurso: 'Editar uma função sem regravar o arquivo', nosso: S, beads: N, serena: S, agent_teams: S },
+  { recurso: 'Recusar, antes de gravar, uma edição que quebra a sintaxe', nosso: S, beads: N, serena: P, agent_teams: N },
+  { recurso: 'Renomear em todo o projeto, com prévia', nosso: S, beads: N, serena: S, agent_teams: N },
   { recurso: 'Funciona sem instalar servidor de linguagem', nosso: S, beads: S, serena: N, agent_teams: S },
   { recurso: 'Precisão medida e publicada contra compilador', nosso: S, beads: N, serena: N, agent_teams: N },
   { recurso: 'Painel ao vivo', nosso: S, beads: P, serena: S, agent_teams: P },
-  { recurso: 'Sincronizar entre máquinas', nosso: N, beads: S, serena: N, agent_teams: N },
+  { recurso: 'Histórico completo de uma tarefa', nosso: S, beads: S, serena: N, agent_teams: P },
+  { recurso: 'Vários computadores', nosso: 'Sim, ao vivo', beads: 'Sim, por sincronização', serena: N, agent_teams: N },
   { recurso: 'Usuários hoje', nosso: 'Nenhum ainda', beads: 'Milhares', serena: 'Milhares', agent_teams: 'Quem usa Claude Code (experimental)' }
 ]);
 
@@ -312,7 +373,7 @@ fig('fila_tarefas', json(path.join(loteDir, 'resumo.json')).revisao?.tarefas ?? 
 fig('groq_tpm', 8000);
 fig('tentativas_antigas', 6);
 fig('testes_antes', 166);
-fig('testes_depois', 194);
+fig('testes_depois', 202);
 
 write('figuras', figuras);
 console.log(`painel: ${readdirSync(out).length} arquivos em ${out}`);

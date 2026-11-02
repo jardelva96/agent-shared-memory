@@ -242,7 +242,7 @@ if (isReview) {
   ].join('\n');
   user = `TASK: ${work.title}\nFILE: ${file}\n\nSPECIFICATION:\n${spec}`;
   toolNames = ['read_pointer', 'read_file', 'list_files', 'write_file', 'run_tests', ...(memoryOn ? ['record'] : []), 'answer'];
-  if (cond === 'simbolo') {
+  if (cond.startsWith('simbolo')) {
     // The version that ships now: the agent changes its function by symbol and never
     // rewrites the file, so a stale copy has nothing to overwrite.
     system = [
