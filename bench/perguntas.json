@@ -1,0 +1,64 @@
+[
+  {
+    "id": "ts-readpointer",
+    "lang": "TypeScript",
+    "root": ".",
+    "pointers": [
+      "src/mcp/tools.ts::readPointerText"
+    ],
+    "question": "Na funcao readPointerText: (1) qual e o tamanho maximo de arquivo, em bytes (numero exato), que ela le quando o ponteiro nao tem simbolo? (2) o que acontece quando o ponteiro aponta para fora da raiz do projeto?",
+    "expect": [
+      "200[\\s\\u00a0\\u202f_.,]?000|200\\s?k",
+      "outside|fora|erro|error|throw|lan[cç]a|recus|rejeit"
+    ]
+  },
+  {
+    "id": "ts-settlereview",
+    "lang": "TypeScript",
+    "root": ".",
+    "pointers": [
+      "src/core/service.ts::settleReview"
+    ],
+    "question": "Em settleReview: (1) como e tratado um painel de revisores de numero par que empata? (2) o que acontece com os revisores que ainda nao votaram quando ja existe maioria?",
+    "expect": [
+      "n[aã]o.{0,25}aprova|not.{0,15}approv|rejei|reject|reprova",
+      "cancel|closeUndecided|fecha|fechad|encerr|close"
+    ]
+  },
+  {
+    "id": "ts-claim",
+    "lang": "TypeScript",
+    "root": ".",
+    "pointers": [
+      "src/core/tasks.ts::claim"
+    ],
+    "question": "Em claim(): (1) o que acontece com uma tarefa CLAIMED cujo prazo expirou? (2) quando ela vira FAILED em vez disso? (3) que condicoes uma tarefa OPEN precisa cumprir para ser entregue ao agente que pede?",
+    "expect": [
+      "OPEN|aberta|volta|returns? to",
+      "maxAttempts|attempts|tentativa",
+      "depend",
+      "assign|atribu|designad|outro agente|another agent|unassigned",
+      "revis|review|judge|julg|cannotJudge|own work|pr[oó]prio"
+    ]
+  },
+  {
+    "id": "ts-config",
+    "lang": "TypeScript",
+    "root": ".",
+    "pointers": [
+      "src/models/types.ts::ProjectConfig",
+      "src/core/config.ts::DEFAULT_CONFIG"
+    ],
+    "question": "Liste todos os campos de ProjectConfig com o valor padrao de cada um em DEFAULT_CONFIG.",
+    "expect": [
+      "staleAfterSeconds\\D{1,80}60",
+      "recentHistoryLimit\\D{1,80}20",
+      "Unnamed Project",
+      "autoCompactAfterEvents\\D{1,80}5[\\s\\u00a0\\u202f.,_]?000",
+      "taskClaimSeconds\\D{1,80}900",
+      "maxTaskDepth\\D{1,80}3",
+      "maxTaskAttempts\\D{1,80}3",
+      "maxReviewRounds\\D{1,80}3"
+    ]
+  }
+]

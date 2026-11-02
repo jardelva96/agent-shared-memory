@@ -3,3 +3,7 @@ dist/
 .agents/
 *.log
 .DS_Store
+bench/resultados/
+bench/perguntas-locais.json
+bench/recorte/cs-ref/bin/
+bench/recorte/cs-ref/obj/

@@ -1,0 +1,73 @@
+[
+  {
+    "id": "cpf",
+    "file": "src/cpf.js",
+    "symbol": "validarCPF",
+    "title": "Implementar validarCPF em src/cpf.js",
+    "spec": "validarCPF(cpf) devolve true ou false. Regras: (1) se cpf nao for string, false; (2) aceita somente digitos, ponto e hifen -- qualquer outro caractere (inclusive espaco) da false; (3) tirando pontos e hifens, precisa ter exatamente 11 digitos; (4) os 11 digitos todos iguais dao false; (5) confere os dois digitos verificadores pelo algoritmo oficial: primeiro digito = soma dos 9 primeiros digitos multiplicados pelos pesos 10,9,...,2; resto = (soma*10) % 11; se resto for 10 vira 0. Segundo digito: o mesmo com os 10 primeiros digitos e pesos 11,10,...,2. Exemplos: validarCPF('529.982.247-25') === true; validarCPF('52998224725') === true; validarCPF('111.111.111-11') === false."
+  },
+  {
+    "id": "moeda",
+    "file": "src/moeda.js",
+    "symbol": "formatarBRL",
+    "title": "Implementar formatarBRL em src/moeda.js",
+    "spec": "formatarBRL(valor) devolve o valor em reais como texto: 'R$ 1.234,56'. Regras: (1) prefixo 'R$' seguido de UM espaco comum (U+0020, nao o espaco especial que toLocaleString usa); (2) sempre duas casas decimais, separador decimal virgula, milhar com ponto; (3) arredonda para centavos com metade para longe do zero (0.125 -> 'R$ 0,13', -0.125 -> '-R$ 0,13'); (4) negativo fica '-R$ 1.234,56'; (5) um valor que arredonda para zero sai 'R$ 0,00', sem sinal; (6) valor que nao seja numero finito (NaN, Infinity, string) lanca TypeError. Exemplos: formatarBRL(1234.5) === 'R$ 1.234,50'; formatarBRL(0) === 'R$ 0,00'; formatarBRL(-7) === '-R$ 7,00'."
+  },
+  {
+    "id": "slug",
+    "file": "src/slug.js",
+    "symbol": "slugify",
+    "title": "Implementar slugify em src/slug.js",
+    "spec": "slugify(texto) gera um slug para URL. Regras: (1) tira acentos (a com til vira a, c cedilha vira c, u com trema vira u); (2) tudo minusculo; (3) '&' vira a palavra 'e'; (4) cada sequencia de caracteres que nao seja letra a-z ou digito 0-9 vira um unico '-'; (5) sem '-' no comeco ou no fim; (6) no maximo 60 caracteres -- se precisar cortar, corta em 60 e tira o '-' que sobrar no fim. Exemplos: slugify('Acao & Reacao!') === 'acao-e-reacao'; slugify('  Ola,   Mundo  ') === 'ola-mundo'; slugify('C# e .NET 10') === 'c-e-net-10'."
+  },
+  {
+    "id": "duracao",
+    "file": "src/duracao.js",
+    "symbol": "parseDuracao",
+    "title": "Implementar parseDuracao em src/duracao.js",
+    "spec": "parseDuracao(texto) converte uma duracao em segundos ou devolve null se o texto for invalido. Formato: um ou mais grupos <inteiro><unidade>, unidade h, m ou s (maiuscula ou minuscula), opcionalmente separados por espacos; cada unidade aparece no maximo uma vez e na ordem h, m, s; espacos nas pontas sao ignorados; o inteiro pode ser maior que 59 ('90m' vale). Invalido -> null: texto vazio, numero sem unidade ('10'), decimal ('1.5h'), unidade repetida ('1h1h'), ordem errada ('5m1h'), qualquer outra coisa, ou entrada que nao seja string. Exemplos: parseDuracao('1h30m') === 5400; parseDuracao('45s') === 45; parseDuracao('1h 5m 10s') === 3910."
+  },
+  {
+    "id": "intervalos",
+    "file": "src/intervalos.js",
+    "symbol": "mesclarIntervalos",
+    "title": "Implementar mesclarIntervalos em src/intervalos.js",
+    "spec": "mesclarIntervalos(lista) recebe uma lista de intervalos [inicio, fim] (numeros, inicio <= fim) e devolve uma lista NOVA, ordenada pelo inicio, com os intervalos que se sobrepoem ou se encostam (fim de um >= inicio do proximo) juntados. Nao altera a lista nem os intervalos recebidos. Lista vazia -> []. Um intervalo com inicio > fim lanca RangeError. Exemplos: mesclarIntervalos([[1,3],[2,6],[8,10]]) -> [[1,6],[8,10]]; mesclarIntervalos([[1,4],[4,5]]) -> [[1,5]]."
+  },
+  {
+    "id": "romano",
+    "file": "src/romano.js",
+    "symbol": "paraRomano",
+    "title": "Implementar paraRomano e deRomano em src/romano.js",
+    "spec": "paraRomano(n) converte inteiro de 1 a 3999 em numeral romano com subtracao (IV, IX, XL, XC, CD, CM); fora disso, ou nao inteiro, lanca RangeError. deRomano(texto) faz o inverso, aceitando so maiusculas e so a forma canonica (a que paraRomano produziria); qualquer outra coisa ('IIII', 'IC', 'mcm', '') lanca RangeError. Exemplos: paraRomano(1994) === 'MCMXCIV'; deRomano('MCMXCIV') === 1994; paraRomano(4) === 'IV'."
+  },
+  {
+    "id": "cache",
+    "file": "src/cache.js",
+    "symbol": "LRU",
+    "title": "Implementar a classe LRU em src/cache.js",
+    "spec": "class LRU: cache de chave/valor com capacidade maxima que descarta o usado ha mais tempo. new LRU(capacidade): capacidade inteira >= 1, senao RangeError. get(chave): devolve o valor ou undefined; conta como uso (fica o mais recente). set(chave, valor): grava ou atualiza; conta como uso; se passar da capacidade, remove o usado ha mais tempo. has(chave): true/false, NAO conta como uso. delete(chave): remove e devolve true se existia, senao false. Propriedade size: quantos itens ha. Exemplo: c = new LRU(2); c.set('a',1); c.set('b',2); c.get('a'); c.set('c',3); -> 'b' saiu, 'a' e 'c' ficam."
+  },
+  {
+    "id": "quebrar",
+    "file": "src/texto.js",
+    "symbol": "quebrarLinhas",
+    "title": "Implementar quebrarLinhas em src/texto.js",
+    "spec": "quebrarLinhas(texto, largura) quebra o texto em linhas de no maximo `largura` caracteres e devolve um array de strings. Regras: (1) palavras sao separadas por espacos/tabs/quebras simples; cada linha leva o maximo de palavras que couber separadas por UM espaco; (2) palavra maior que a largura e cortada em pedacos de `largura` caracteres; (3) paragrafos (separados por uma linha em branco, ou seja '\\n\\n' ou mais) ficam separados por uma string vazia '' no resultado; (4) texto vazio ou so espacos -> []; (5) largura nao inteira ou < 1 lanca RangeError. ATENCAO: src/texto.js tambem tem a funcao contarPalavras, feita por outro agente; mantenha-a intacta. Exemplo: quebrarLinhas('o rato roeu a roupa', 10) -> ['o rato', 'roeu a', 'roupa']."
+  },
+  {
+    "id": "contar",
+    "file": "src/texto.js",
+    "symbol": "contarPalavras",
+    "title": "Implementar contarPalavras em src/texto.js",
+    "spec": "contarPalavras(texto) devolve quantas palavras ha no texto. Palavra = sequencia de letras (inclusive acentuadas, use \\p{L}) e/ou digitos; hifen ou apostrofo ENTRE dois desses caracteres faz parte da palavra ('guarda-chuva' e uma palavra, d'agua tambem). Pontuacao, espacos e hifens soltos nao contam. Texto vazio -> 0. ATENCAO: src/texto.js tambem tem a funcao quebrarLinhas, feita por outro agente; mantenha-a intacta. Exemplos: contarPalavras('Ola, mundo!') === 2; contarPalavras('guarda-chuva e pao') === 3."
+  },
+  {
+    "id": "relatorio",
+    "file": "src/relatorio.js",
+    "symbol": "resumoDePedidos",
+    "dependsOn": ["moeda"],
+    "title": "Implementar resumoDePedidos em src/relatorio.js",
+    "spec": "resumoDePedidos(pedidos) recebe [{ status, valor }] com status 'pago', 'pendente' ou 'cancelado' e devolve { pago, pendente, cancelado, total } com cada soma formatada por formatarBRL, que ja existe em src/moeda.js (importe de './moeda.js', nao reimplemente). total = pago + pendente (cancelado fica fora). Status desconhecido lanca Error. Somas em centavos inteiros para nao acumular erro de ponto flutuante (0.1 + 0.2 deve dar 'R$ 0,30'). Lista vazia -> tudo 'R$ 0,00'. Exemplo: resumoDePedidos([{status:'pago',valor:10},{status:'cancelado',valor:5}]) -> { pago:'R$ 10,00', pendente:'R$ 0,00', cancelado:'R$ 5,00', total:'R$ 10,00' }."
+  }
+]
