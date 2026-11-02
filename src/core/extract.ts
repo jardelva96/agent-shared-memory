@@ -13,8 +13,10 @@
 
 export interface ExtractedSymbol {
   text: string;
-  /** 1-based, inclusive. */
+  /** 1-based, inclusive. Includes the doc comment above the declaration. */
   startLine: number;
+  /** 1-based: the line that names the symbol, after its doc comment and attributes. */
+  declarationLine: number;
   endLine: number;
 }
 
@@ -56,8 +58,9 @@ function bareName(symbol: string): string {
 /** How strongly a line looks like the *declaration* of `name`, rather than a use of it. */
 function declarationScore(line: string, name: string): number {
   // Strings and comments are blanked first: `@Get('overview') overview()` names the method
-  // twice, and the first mention, inside the quotes, is not code.
-  const code = maskLiterals(line);
+  // twice, and the first mention, inside the quotes, is not code. Decorators in front of the
+  // declaration go too (`@IsString() @MaxLength(220) title!: string;`).
+  const code = maskLiterals(line).replace(/^\s*(?:@[\w.]+(?:\([^()]*\))?\s*)+/, m => ' '.repeat(m.length));
   const at = indexOfWord(code, name);
   if (at < 0) return 0;
 
@@ -90,7 +93,7 @@ function declarationScore(line: string, name: string): number {
  * still match the original. A line that starts inside a block comment (` * ...`) is all
  * comment.
  */
-function maskLiterals(line: string): string {
+export function maskLiterals(line: string): string {
   if (/^\s*(\/\*|\*(\s|\/|$))/.test(line)) return ' '.repeat(line.length);
   let out = '';
   let quote: string | undefined;
@@ -112,6 +115,15 @@ function maskLiterals(line: string): string {
     if ((char === '/' && line[i + 1] === '/') || isHashComment(line, i)) {
       return out + ' '.repeat(line.length - i);
     }
+    // A regex literal is text too: `/[{(]/` holds a brace and a parenthesis that open nothing.
+    if (char === '/' && line[i + 1] !== '*') {
+      const end = regexEnd(line, i);
+      if (end > 0) {
+        out += `/${' '.repeat(end - i - 1)}/`;
+        i = end;
+        continue;
+      }
+    }
     if (char === '"' || char === "'" || char === '`') quote = char;
     out += char;
   }
@@ -130,7 +142,7 @@ function isHashComment(line: string, i: number): boolean {
  * the file. A `/` begins a regex where a value is expected: after an operator, an opening
  * bracket, a comma, or at the start of the line.
  */
-function regexEnd(line: string, i: number): number {
+export function regexEnd(line: string, i: number): number {
   const previous = line.slice(0, i).trimEnd();
   if (!(previous === '' || /[(,=:[!&|?{};+\-*%<>~^]$/.test(previous) || /\b(return|typeof|case)$/.test(previous))) {
     return -1;
@@ -288,14 +300,46 @@ const MAX_LINES = 400;
  * rather than be handed a confident slice of the wrong thing.
  */
 export function extractSymbol(source: string, symbol: string): ExtractedSymbol | undefined {
+  const lines = source.split('\n');
+  const best = findDeclaration(lines, symbol);
+  return best === undefined ? undefined : sliceAt(lines, best);
+}
+
+/**
+ * The 0-based line that declares `symbol`, or undefined. Exported for the tools that need
+ * the line itself -- an edit that replaces a symbol, a search across files -- rather than
+ * the text around it.
+ */
+export function findDeclaration(lines: string[], symbol: string): number | undefined {
   const name = bareName(symbol);
   if (!name) return undefined;
 
-  const lines = source.split('\n');
+  // `OrderService.CancelAsync` is looked for inside OrderService first. A member's bare name
+  // is often also a local somewhere else in the file (`status`, `config`), and a local
+  // declaration outscores a property; the qualifier is what the pointer means.
+  const segments = symbol.split('(')[0].split(/[.#]|::/).map(s => s.trim()).filter(Boolean);
+  if (segments.length > 1) {
+    const container = findDeclaration(lines, segments.slice(0, -1).join('.'));
+    if (container !== undefined) {
+      // The whole type, however long: a member past line 400 of a class is still its member.
+      const range = sliceAt(lines, container, Infinity);
+      // Members sit at one indentation; a local of the same name inside a method sits deeper,
+      // and `const config = {` outscores `async config() {` on its own.
+      const firstMember = lines.slice(container + 1, range.endLine).find(line => line.trim() !== '' && !/^\s*[{}]\s*$/.test(line));
+      const inside = bestDeclaration(lines, name, container + 1, range.endLine, firstMember === undefined ? undefined : indentOf(firstMember));
+      if (inside !== undefined) return inside;
+    }
+  }
+  return bestDeclaration(lines, name, 0, lines.length);
+}
+
+/** The best-scoring declaration of `name` between 0-based `from` (inclusive) and `to` (exclusive). */
+function bestDeclaration(lines: string[], name: string, from: number, to: number, memberIndent?: number): number | undefined {
   let best = -1;
   let bestScore = 1; // A bare mention is not enough on its own.
-  for (let i = 0; i < lines.length; i++) {
-    const score = declarationScore(lines[i], name);
+  for (let i = from; i < to; i++) {
+    let score = declarationScore(lines[i], name);
+    if (score > 1 && memberIndent !== undefined && indentOf(lines[i]) === memberIndent) score += 4;
     // On a tie the shallower line wins: `const config = await this.config();` inside a method
     // scores like the `config()` method it calls, and a pointer means the member, not a local.
     if (score > bestScore || (score === bestScore && best >= 0 && indentOf(lines[i]) < indentOf(lines[best]))) {
@@ -303,8 +347,11 @@ export function extractSymbol(source: string, symbol: string): ExtractedSymbol |
       best = i;
     }
   }
-  if (best < 0) return undefined;
+  return best < 0 ? undefined : best;
+}
 
+/** The symbol whose declaration is on 0-based line `best`, with its doc comment. */
+export function sliceAt(lines: string[], best: number, maxLines = MAX_LINES): ExtractedSymbol {
   const startLine = commentStart(lines, best);
   const declaration = lines[best];
   const indent = declaration.length - declaration.trimStart().length;
@@ -325,12 +372,21 @@ export function extractSymbol(source: string, symbol: string): ExtractedSymbol |
     // a bare signature, or an enum with only its first member.
     let depth = 0;
     let opened = false;
-    for (let i = best; i < lines.length && i - best < MAX_LINES; i++) {
+    for (let i = best; i < lines.length && i - best < maxLines; i++) {
       // A signature with no body, followed by a gap: whatever comes next is not part of it.
       // Without semicolons (`type A = B` then `type C = D`) a statement also ends where the
       // next declaration begins.
       const inString = Boolean(state.openQuote);
       if (i > best && !opened && depth <= 0 && !inString && (lines[i].trim() === '' || startsDeclaration(lines[i], indent))) break;
+      // With no terminator at all (Python's `RAIZ = Path(...)` followed by `CONFIG = ...`), a
+      // finished statement is followed by a line at its own indentation. Not when the line
+      // before visibly continues, and not for a body brace on its own line (C#, Java).
+      if (
+        i > best && !opened && depth <= 0 && !inString &&
+        indentOf(lines[i]) <= indent &&
+        !/(=>|[([{,\\=+\-*/&|?:.])\s*$/.test(lines[i - 1]) &&
+        !/^\s*([{:]|where\b)/.test(lines[i])
+      ) break;
       depth += countBraces(lines[i], state);
       opened ||= state.sawBrace;
       endLine = i;
@@ -348,7 +404,7 @@ export function extractSymbol(source: string, symbol: string): ExtractedSymbol |
     // Indentation-based (Python): the body is everything indented past the declaration,
     // except that a triple-quoted string may sit at any indentation until it closes.
     let open: string | undefined;
-    for (let i = best + 1; i < lines.length && i - best < MAX_LINES; i++) {
+    for (let i = best + 1; i < lines.length && i - best < maxLines; i++) {
       const line = lines[i];
       if (!open) {
         if (line.trim() === '') {
@@ -367,6 +423,7 @@ export function extractSymbol(source: string, symbol: string): ExtractedSymbol |
   return {
     text: lines.slice(startLine, endLine + 1).join('\n'),
     startLine: startLine + 1,
+    declarationLine: best + 1,
     endLine: endLine + 1
   };
 }
