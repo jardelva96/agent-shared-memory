@@ -18,7 +18,9 @@ const BOOLEAN_FLAGS = new Set([
   'all',
   'peek',
   'review',
-  'help'
+  'help',
+  'shared',
+  'remove'
 ]);
 
 /**
@@ -31,6 +33,11 @@ const BOOLEAN_FLAGS = new Set([
 const KNOWN_FLAGS = new Set([
   ...BOOLEAN_FLAGS,
   'root',
+  'priority',
+  'ttl',
+  'reason',
+  'path',
+  'text',
   'agent',
   'role',
   'task',

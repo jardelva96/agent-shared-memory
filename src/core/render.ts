@@ -1,4 +1,4 @@
-import { AgentActivity, AgentState, ProjectConfig } from '../models/types.js';
+import { AgentActivity, AgentState, FileReservation, ProjectConfig, ProjectFact } from '../models/types.js';
 import { ageSeconds, localTime } from '../utils/time.js';
 import { formatPointer } from './pointer.js';
 
@@ -10,7 +10,8 @@ export function effectiveStatus(state: AgentState, config: ProjectConfig): Agent
 export function renderSharedMemory(
   states: AgentState[],
   recent: AgentActivity[],
-  config: ProjectConfig
+  config: ProjectConfig,
+  extras: { reservations?: FileReservation[]; facts?: ProjectFact[] } = {}
 ): string {
   const now = new Date().toISOString();
   const sorted = [...states].sort((a, b) => a.id.localeCompare(b.id));
@@ -42,6 +43,20 @@ export function renderSharedMemory(
     lines.push('');
   }
 
+  if (extras.reservations?.length) {
+    lines.push('## RESERVED FILES', '');
+    for (const r of extras.reservations) {
+      lines.push(`- ${r.pattern} | ${r.agentId} | ${r.exclusive ? 'exclusive' : 'shared'} until ${localTime(r.expiresAt)}${r.reason ? ` | ${r.reason}` : ''}`);
+    }
+    lines.push('');
+  }
+
+  if (extras.facts?.length) {
+    lines.push('## PROJECT FACTS', '');
+    for (const f of extras.facts) lines.push(`- ${f.text}`);
+    lines.push('');
+  }
+
   lines.push('## RECENT CHANGES', '');
   if (recent.length === 0) {
     lines.push('_No recent activity._', '');
@@ -61,6 +76,8 @@ export function renderSharedMemory(
   lines.push('3. Register CHANGED/CREATED/TESTING/DONE immediately after the action.');
   lines.push('4. Use semantic pointers: `file::symbol::parameter`, not fragile line numbers.');
   lines.push('5. Never edit another agent\'s history file.');
+  lines.push('6. Reserve the files you will change; a file another agent reserved is theirs until it is released.');
+  lines.push('7. Prefer changing one symbol (memory_replace_symbol) to rewriting a whole file.');
   lines.push('');
   return `${lines.join('\n')}\n`;
 }

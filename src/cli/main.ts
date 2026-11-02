@@ -10,6 +10,10 @@ import { startMcpServer } from '../mcp/server.js';
 import { describeChange } from '../git/repo.js';
 import { assertGitRepo, baselineOf, ObservedChange, runWatchPass } from '../git/watcher.js';
 import { runQueue } from '../core/runner.js';
+import { readFile } from 'node:fs/promises';
+import { findReferences, findSymbol, outlineSymbols } from '../core/symbols.js';
+import { localTime } from '../utils/time.js';
+import { runClaudeHook, runGitPreCommit, setupClaude, setupGit } from './hooks.js';
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -215,7 +219,8 @@ async function main(): Promise<void> {
           dependsOn: stringFlag(parsed.flags, 'depends-on')?.split(',').map(id => id.trim()).filter(Boolean),
           reviewBy: stringFlag(parsed.flags, 'review-by'),
           reviewOpen: parsed.flags.review === true,
-          reviewers: numberFlag(parsed.flags, 'reviewers')
+          reviewers: numberFlag(parsed.flags, 'reviewers'),
+          priority: numberFlag(parsed.flags, 'priority')
         });
         // Building a chain from a script means capturing the id of each part to pass to
         // --depends-on. `claim` and `list` already answer in JSON; create silently ignored
@@ -230,6 +235,16 @@ async function main(): Promise<void> {
           const panel = task.reviewers && task.reviewers > 1 ? `${task.reviewers} reviewers, majority decides; first is ` : '';
           console.log(`Review queued as ${panel}${task.reviewTaskId} for ${who}, blocked until the work lands`);
         }
+        break;
+      }
+      if (sub === 'ready') {
+        const ready = await service.readyTasks(stringFlag(parsed.flags, 'agent'));
+        if (parsed.flags.json) {
+          console.log(JSON.stringify(ready, null, 2));
+          break;
+        }
+        if (ready.length === 0) console.log('Nothing ready: every open task is blocked, assigned elsewhere or a review of your own work.');
+        for (const task of ready) console.log(`[P${task.priority ?? 2}] ${formatTask(task)}`);
         break;
       }
       if (sub === 'claim') {
@@ -268,7 +283,7 @@ async function main(): Promise<void> {
         for (const task of tasks) console.log(formatTask(task));
         break;
       }
-      throw new Error(`Unknown task subcommand: ${sub}. Use create, list, claim, done, fail or cancel.`);
+      throw new Error(`Unknown task subcommand: ${sub}. Use create, list, ready, claim, done, fail or cancel.`);
     }
 
     case 'schedule': {
@@ -472,9 +487,137 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'reserve': {
+      const agentId = required(stringFlag(parsed.flags, 'agent'), '--agent');
+      const result = await service.reserve(agentId, pathsFrom(parsed), {
+        exclusive: parsed.flags.shared !== true,
+        ttlSeconds: (numberFlag(parsed.flags, 'ttl') ?? 30) * 60,
+        reason: stringFlag(parsed.flags, 'reason')
+      });
+      if (parsed.flags.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (result.conflicts.length > 0) {
+        console.log('Nothing reserved. Held by other agents:');
+        for (const c of result.conflicts) {
+          console.log(`  ${c.pattern}: ${c.holder.agentId} (${c.holder.pattern}, ${c.holder.exclusive ? 'exclusive' : 'shared'} until ${localTime(c.holder.expiresAt)})`);
+        }
+      } else {
+        for (const r of result.granted) console.log(`Reserved ${r.pattern} for ${r.agentId} (${r.exclusive ? 'exclusive' : 'shared'} until ${localTime(r.expiresAt)})`);
+      }
+      if (result.conflicts.length > 0) process.exitCode = 1;
+      break;
+    }
+
+    case 'release': {
+      const agentId = required(stringFlag(parsed.flags, 'agent'), '--agent');
+      const paths = pathsFrom(parsed, false);
+      const released = await service.release(agentId, paths.length ? paths : undefined);
+      console.log(`Released ${released} reservation(s).`);
+      break;
+    }
+
+    case 'reservations': {
+      const active = await service.reservations.active();
+      if (parsed.flags.json) {
+        console.log(JSON.stringify(active, null, 2));
+        break;
+      }
+      if (active.length === 0) console.log('No files reserved.');
+      for (const r of active) console.log(`${r.pattern.padEnd(40)} ${r.agentId.padEnd(16)} ${r.exclusive ? 'exclusive' : 'shared   '} until ${localTime(r.expiresAt)}${r.reason ? `  ${r.reason}` : ''}`);
+      break;
+    }
+
+    case 'remember': {
+      const fact = await service.remember(required(parsed.positionals.join(' ') || stringFlag(parsed.flags, 'text'), 'the fact'), stringFlag(parsed.flags, 'agent') ?? 'human');
+      console.log(`Remembered ${fact.id}: ${fact.text}`);
+      break;
+    }
+
+    case 'forget': {
+      const removed = await service.forget(required(parsed.positionals[0] ?? stringFlag(parsed.flags, 'id'), 'fact id'));
+      console.log(removed ? 'Forgotten.' : 'No single fact matches that id.');
+      break;
+    }
+
+    case 'facts': {
+      const facts = await service.facts.list();
+      if (parsed.flags.json) console.log(JSON.stringify(facts, null, 2));
+      else if (facts.length === 0) console.log('No project facts yet. Add one with: agent-memory remember "..."');
+      else for (const f of facts) console.log(`${f.id}  ${f.text}`);
+      break;
+    }
+
+    case 'prime': {
+      process.stdout.write(await service.prime(stringFlag(parsed.flags, 'agent')));
+      break;
+    }
+
+    case 'symbols': {
+      const file = required(parsed.positionals[0], 'a file');
+      const entries = outlineSymbols(await readFile(path.resolve(root, file), 'utf8'), file);
+      if (parsed.flags.json) console.log(JSON.stringify(entries, null, 2));
+      else for (const e of entries) console.log(`${String(e.declarationLine).padStart(5)}-${String(e.endLine).padEnd(5)} ${e.kind.padEnd(10)} ${e.container ? `${e.container}.` : ''}${e.name}`);
+      break;
+    }
+
+    case 'find': {
+      const matches = await findSymbol(root, required(parsed.positionals[0], 'a symbol name'));
+      if (parsed.flags.json) console.log(JSON.stringify(matches, null, 2));
+      else if (matches.length === 0) console.log('Not found.');
+      else for (const m of matches) console.log(`${m.pointer}  (${m.kind}, lines ${m.declarationLine}-${m.endLine})`);
+      break;
+    }
+
+    case 'refs': {
+      const refs = await findReferences(root, required(parsed.positionals[0], 'a symbol name'));
+      if (parsed.flags.json) console.log(JSON.stringify(refs, null, 2));
+      else if (refs.length === 0) console.log('No uses found.');
+      else for (const r of refs) console.log(`${r.file}:${r.line}  ${r.text}`);
+      break;
+    }
+
+    case 'hook': {
+      const kind = parsed.positionals[0];
+      const outcome =
+        kind === 'claude'
+          ? await runClaudeHook(required(parsed.positionals[1], 'hook event'), await readStdin())
+          : kind === 'pre-commit'
+            ? await runGitPreCommit(root)
+            : undefined;
+      if (!outcome) throw new Error('Use: hook claude <session-start|pre-write|post-write|session-end>, or hook pre-commit.');
+      if (outcome.stdout) process.stdout.write(`${outcome.stdout}\n`);
+      if (outcome.stderr) process.stderr.write(`${outcome.stderr}\n`);
+      process.exitCode = outcome.exitCode;
+      break;
+    }
+
+    case 'setup': {
+      const target = parsed.positionals[0];
+      const options = { remove: parsed.flags.remove === true };
+      const done =
+        target === 'claude' ? await setupClaude(root, options) : target === 'git' ? await setupGit(root, options) : undefined;
+      if (!done) throw new Error('Use: setup claude [--remove], or setup git [--remove].');
+      for (const line of done) console.log(line);
+      break;
+    }
+
     default:
       throw new Error(`Unknown command: ${command}. Run agent-memory help.`);
   }
+}
+
+/** Paths given as positionals or as a comma-separated --path. */
+function pathsFrom(parsed: ReturnType<typeof parseArgs>, needOne = true): string[] {
+  const listed = [...parsed.positionals, ...(stringFlag(parsed.flags, 'path')?.split(',') ?? [])].map(p => p.trim()).filter(Boolean);
+  if (needOne && listed.length === 0) throw new Error('Name at least one path, e.g. agent-memory reserve --agent A src/auth/');
+  return listed;
+}
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return '';
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function formatTask(task: AgentTask, verbose = false): string {
@@ -528,7 +671,7 @@ function printHelp(): void {
   console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000] [--max-depth 3]\n  compact [--keep 500] [--history] [--dry-run]\n\nWork queue:\n  task create --agent A --title "..." [--detail "..."] [--for B] [--pointer "..."]\n                [--review-by C]        queue a review that must accept the work
                 [--review]             same, but open to whoever is free (never the doer)
                 [--reviewers 3]        queue an open panel (1-9); majority decides\n                [--depends-on T1,T2]   stay out of the queue until all of them are DONE
-                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--json]\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
+                [--priority 0-4]       0 is handed out first; reviews inherit it\n                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--json]\n  task ready [--agent A] [--json]   what can be claimed now, most urgent first\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\nFiles:\n  reserve --agent A <path|folder/|glob>... [--shared] [--ttl 30] [--reason "..."]\n                           all or nothing; other agents are refused while it holds\n  release --agent A [path...]      without paths, everything the agent holds\n  reservations [--json]\n\nCode by symbol:\n  symbols <file> [--json]          what a file declares, with line ranges\n  find <Name|Type.member> [--json] where a symbol is declared in the project\n  refs <Name> [--json]             where it is used\n\nProject memory:\n  remember "fact" [--agent A]      a fact every session starts with\n  facts [--json]  |  forget <id>\n  prime [--agent A]                the start-of-session briefing\n\nEditors and git:\n  setup claude [--remove]          Claude Code hooks + MCP server for this project\n  setup git [--remove]             pre-commit guard for reserved files\n  hook claude <session-start|pre-write|post-write|session-end>   (run by the hooks)\n  hook pre-commit                                                 (run by git)\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
 }
 
 main().catch(error => {

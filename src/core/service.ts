@@ -1,14 +1,17 @@
 import path from 'node:path';
-import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, AgentTask, CodePointer, Conflict, ProjectConfig, TaskSchedule, TaskStatus } from '../models/types.js';
+import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, AgentTask, CodePointer, Conflict, ProjectConfig, ProjectFact, TaskSchedule, TaskStatus } from '../models/types.js';
 import { createId, createScheduleId, createSessionId, createTaskId } from '../utils/ids.js';
-import { nowIso } from '../utils/time.js';
+import { localTime, nowIso } from '../utils/time.js';
 import { readConfig, writeConfig, DEFAULT_CONFIG } from './config.js';
 import { isLockTimeout, withFileLock } from '../utils/fs.js';
 import { parseCron } from './cron.js';
-import { ScheduleStore, TaskStore } from './tasks.js';
+import { readyFor, ScheduleStore, TaskStore } from './tasks.js';
 import { detectConflicts } from './conflicts.js';
+import { FactStore } from './facts.js';
 import { InboxStore } from './inbox.js';
 import { formatPointer, pointerKey } from './pointer.js';
+import { effectiveStatus } from './render.js';
+import { ReservationStore, ReserveOptions, ReserveResult } from './reservations.js';
 import { MemoryStore } from './store.js';
 
 export interface ActivityInput {
@@ -69,6 +72,8 @@ export interface CreateTaskInput {
   title: string;
   createdBy: string;
   detail?: string;
+  /** 0 (most urgent) to 4. Absent means 2. A review inherits its work's priority. */
+  priority?: number;
   pointer?: CodePointer;
   assignedTo?: string;
   /** Set when a runner creates a task while executing one, to bound spawn depth. */
@@ -113,12 +118,16 @@ export class AgentMemoryService {
   readonly messages: InboxStore;
   readonly tasks: TaskStore;
   readonly schedules: ScheduleStore;
+  readonly reservations: ReservationStore;
+  readonly facts: FactStore;
 
   constructor(public readonly root = process.cwd()) {
     this.store = new MemoryStore(root);
     this.messages = new InboxStore(root);
     this.tasks = new TaskStore(root);
     this.schedules = new ScheduleStore(root);
+    this.reservations = new ReservationStore(root);
+    this.facts = new FactStore(root);
   }
 
   async init(projectName?: string, overrides: Partial<ProjectConfig> = {}): Promise<ProjectConfig> {
@@ -220,8 +229,108 @@ export class AgentMemoryService {
       })
     );
     await this.store.deleteState(agentId);
+    // An agent that leaves holds nothing: its reservations would otherwise block until they expire.
+    await this.reservations.release(agentId).catch(() => 0);
     await this.afterWrite();
     return state;
+  }
+
+  /**
+   * Reserves files, folders or globs for this agent. All of them or none: when any is held
+   * against it, nothing is granted and the conflicts say by whom and until when.
+   */
+  async reserve(agentId: string, patterns: string[], options: ReserveOptions = {}): Promise<ReserveResult> {
+    await this.requireAgent(agentId);
+    const result = await this.reservations.reserve(agentId, patterns, options);
+    if (result.granted.length > 0) {
+      const first = result.granted[0];
+      await this.store.appendActivity(
+        this.makeActivity({
+          agentId,
+          type: 'NOTE',
+          description:
+            `reserved ${result.granted.map(r => r.pattern).join(', ')} (${first.exclusive ? 'exclusive' : 'shared'} until ${localTime(first.expiresAt)})` +
+            (first.reason ? `: ${first.reason}` : ''),
+          pointer: { file: first.pattern }
+        })
+      );
+      await this.afterWrite();
+    }
+    return result;
+  }
+
+  /** Releases this agent's reservations on these patterns, or all of them. Returns how many. */
+  async release(agentId: string, patterns?: string[]): Promise<number> {
+    const released = await this.reservations.release(agentId, patterns);
+    if (released > 0 && (await this.store.stateExists(agentId))) {
+      await this.store.appendActivity(
+        this.makeActivity({ agentId, type: 'NOTE', description: `released ${patterns?.length ? patterns.join(', ') : `all ${released} reservation(s)`}` })
+      );
+      await this.afterWrite();
+    }
+    return released;
+  }
+
+  async remember(text: string, createdBy: string): Promise<ProjectFact> {
+    const fact = await this.facts.remember(text, createdBy);
+    await this.afterWrite();
+    return fact;
+  }
+
+  async forget(id: string): Promise<boolean> {
+    const removed = await this.facts.forget(id);
+    if (removed) await this.afterWrite();
+    return removed;
+  }
+
+  /** What `agentId` could claim right now, most urgent first; without an agent, all unblocked work. */
+  async readyTasks(agentId?: string): Promise<AgentTask[]> {
+    return readyFor(await this.tasks.list(), agentId);
+  }
+
+  /**
+   * What an agent needs at the start of a session, in one short text: the rules, the facts,
+   * who is doing what, which files are taken, what work is ready and what is waiting for it.
+   * Written for the SessionStart hook, which also runs again after the context is compacted.
+   */
+  async prime(agentId?: string): Promise<string> {
+    const config = await this.config();
+    const [states, reservations, facts, ready] = await Promise.all([
+      this.store.listStates(),
+      this.reservations.active(),
+      this.facts.list(),
+      this.readyTasks(agentId)
+    ]);
+    const lines = [`# Agent Shared Memory: ${config.projectName}`, ''];
+    if (agentId) lines.push(`You are ${agentId}. Other agents may be working in this repository at the same time.`, '');
+    lines.push(
+      'How to work here:',
+      '- Before changing a file, reserve it (memory_reserve, or `agent-memory reserve`). A file another agent reserved is theirs until released.',
+      '- Change one function or class with memory_replace_symbol instead of rewriting the file: it re-reads the file at write time, so other agents\' changes survive.',
+      '- Read code by pointer (memory_read_pointer "file::Type.member") instead of whole files.',
+      '- After a change, record it (memory_record CHANGED); release your reservations when done.',
+      ''
+    );
+    if (facts.length) lines.push('Project facts:', ...facts.map(f => `- ${f.text}`), '');
+    const others = states.filter(s => s.id !== agentId && effectiveStatus(s, config) !== 'OFFLINE');
+    if (others.length) {
+      lines.push('Agents active now:', ...others.map(s => `- ${s.id}: ${s.current?.description ?? '-'}${s.current?.pointer ? ` (${formatPointer(s.current.pointer)})` : ''}`), '');
+    }
+    if (reservations.length) {
+      lines.push('Reserved files:', ...reservations.map(r => `- ${r.pattern}: ${r.agentId}, ${r.exclusive ? 'exclusive' : 'shared'} until ${localTime(r.expiresAt)}`), '');
+    }
+    if (ready.length) {
+      lines.push(
+        `Ready tasks (${ready.length}):`,
+        ...ready.slice(0, 10).map(t => `- ${t.id} [P${t.priority ?? 2}] ${t.title}${t.assignedTo ? ` (for ${t.assignedTo})` : ''}`),
+        ''
+      );
+    }
+    if (agentId && (await this.store.stateExists(agentId))) {
+      const unread = await this.messages.unreadCount(agentId);
+      if (unread > 0) lines.push(`You have ${unread} unread message(s): memory_inbox.`, '');
+    }
+    return lines.join('\n').trimEnd() + '\n';
   }
 
   async compact(options: CompactOptions = {}): Promise<CompactResult> {
@@ -429,6 +538,7 @@ export class AgentMemoryService {
       dependsOn: input.dependsOn,
       reviewOf: input.reviewOf,
       reviewRound: input.reviewRound,
+      priority: normalisePriority(input.priority),
       createdAt: now,
       updatedAt: now
     };
@@ -634,7 +744,8 @@ export class AgentMemoryService {
           pointer: work.pointer,
           dependsOn: work.id,
           reviewOf: work.id,
-          reviewRound: round
+          reviewRound: round,
+          priority: work.priority
         })
       );
     }
@@ -1023,6 +1134,14 @@ function statusFor(type: ActivityType, previous: AgentStatus): AgentStatus {
     case 'TASK':
       return previous;
   }
+}
+
+function normalisePriority(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 0 || value > 4) {
+    throw new Error('priority must be a whole number from 0 (most urgent) to 4.');
+  }
+  return value;
 }
 
 function normaliseReviewers(value: number | undefined): number {

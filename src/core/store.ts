@@ -4,7 +4,9 @@ import { AgentActivity, AgentState, ProjectConfig } from '../models/types.js';
 import { assertAgentId } from '../utils/ids.js';
 import { atomicWrite, atomicWriteJson, ensureDir, isLockTimeout, readJson, withFileLock } from '../utils/fs.js';
 import { resolvePaths } from './paths.js';
+import { FactStore } from './facts.js';
 import { renderActivity, renderAgentHeader, renderSessionBanner, renderSharedMemory } from './render.js';
+import { ReservationStore } from './reservations.js';
 
 export class MemoryStore {
   constructor(public readonly root = process.cwd()) {}
@@ -197,10 +199,15 @@ export class MemoryStore {
     const p = this.paths;
     try {
       return await withFileLock(path.join(p.locksDir, 'shared-memory.lock'), async () => {
-        const [states, lines] = await Promise.all([this.listStates(), this.journalLines()]);
+        const [states, lines, reservations, facts] = await Promise.all([
+          this.listStates(),
+          this.journalLines(),
+          new ReservationStore(p.root).active(),
+          new FactStore(p.root).list()
+        ]);
         await atomicWrite(
           p.sharedMemoryFile,
-          renderSharedMemory(states, tail(lines, config.recentHistoryLimit), config)
+          renderSharedMemory(states, tail(lines, config.recentHistoryLimit), config, { reservations, facts })
         );
         // The journal was read here anyway; the size lets the caller decide to compact
         // without paying for a second full read.

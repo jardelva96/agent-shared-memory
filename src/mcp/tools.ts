@@ -7,6 +7,7 @@ import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
 import { dependenciesOf } from '../core/tasks.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols } from '../core/symbols.js';
 import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
 import { INVALID_PARAMS, RpcError } from './jsonrpc.js';
 
@@ -224,9 +225,24 @@ export const TOOLS: ToolDefinition[] = [
             'that did the work. Use instead of review_by when any capable agent can judge, so a busy ' +
             'or dead reviewer cannot leave the work waiting forever.'
         },
-        pointer: { type: 'string', description: 'Optional "file::symbol::parameter" the task is about.' }
+        pointer: { type: 'string', description: 'Optional "file::symbol::parameter" the task is about.' },
+        priority: {
+          type: 'integer',
+          description: '0 (most urgent) to 4. Default 2. The queue hands out the most urgent ready task first; its review inherits it.'
+        }
       },
       required: ['agent', 'title']
+    }
+  },
+  {
+    name: 'memory_task_ready',
+    description:
+      'List the tasks you could claim right now, most urgent first: nothing blocks them, nobody else holds them, and none ' +
+      'is a review of your own work. Use it to choose what to do next.',
+    inputSchema: {
+      type: 'object',
+      properties: { agent: { type: 'string', description: 'Your agent id.' } },
+      required: ['agent']
     }
   },
   {
@@ -297,6 +313,124 @@ export const TOOLS: ToolDefinition[] = [
         agent: { type: 'string', description: 'Only return events from this agent id.' }
       }
     }
+  },
+  {
+    name: 'memory_reserve',
+    description:
+      'Reserve files, folders ("src/auth/") or globs ("src/**/*.test.ts") before changing them. Exclusive by default: other ' +
+      'agents are refused while it holds, at write time and at commit. All or nothing: if any path is held by someone ' +
+      'else, nothing is reserved and you are told by whom. Reservations expire on their own.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id.' },
+        paths: { type: 'array', items: { type: 'string' }, description: 'Project-relative paths, folders or globs.' },
+        shared: { type: 'boolean', description: 'Allow other shared holders (readers); only an exclusive claim is refused.' },
+        minutes: { type: 'integer', description: 'How long to hold them, default 30. Reserve again to extend.' },
+        reason: { type: 'string', description: 'What for, shown to the agents you keep out.' }
+      },
+      required: ['agent', 'paths']
+    }
+  },
+  {
+    name: 'memory_release',
+    description: 'Release reservations you hold, so other agents can change those files. Without paths, releases all of yours.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id.' },
+        paths: { type: 'array', items: { type: 'string' }, description: 'The patterns to release, as reserved.' }
+      },
+      required: ['agent']
+    }
+  },
+  {
+    name: 'memory_reservations',
+    description: 'List the files reserved right now: by whom, exclusive or shared, and until when.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'memory_symbols',
+    description:
+      'List what a file declares (types, functions, methods, properties, constants) with line ranges, without reading it. ' +
+      'Use it to pick the one symbol to read with memory_read_pointer.',
+    inputSchema: {
+      type: 'object',
+      properties: { file: { type: 'string', description: 'Project-relative file path.' } },
+      required: ['file']
+    }
+  },
+  {
+    name: 'memory_find_symbol',
+    description: 'Find where a symbol is declared anywhere in the project. "Type.member" narrows to that type. Returns pointers.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'A name, e.g. "CancelAsync" or "OrderService.CancelAsync".' } },
+      required: ['name']
+    }
+  },
+  {
+    name: 'memory_references',
+    description: 'Find the lines that use a symbol across the project, outside strings and comments. Use before changing its signature.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'The symbol name.' } },
+      required: ['name']
+    }
+  },
+  {
+    name: 'memory_replace_symbol',
+    description:
+      'Replace one function, method, class or property in place, instead of rewriting the whole file. The file is re-read at ' +
+      'the moment of the edit, so changes other agents made elsewhere in it survive, and the change is recorded for them. ' +
+      'Give the complete new code of the symbol, from its signature to its end. Include a doc comment only to replace the old one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id.' },
+        pointer: { type: 'string', description: '"file::symbol" or "file::Type.member".' },
+        code: { type: 'string', description: 'The new code of the symbol.' }
+      },
+      required: ['agent', 'pointer', 'code']
+    }
+  },
+  {
+    name: 'memory_insert_symbol',
+    description: 'Insert new code right after (or before) an existing symbol, e.g. a new method after another. Same safety as memory_replace_symbol.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id.' },
+        pointer: { type: 'string', description: 'The existing symbol to insert next to: "file::symbol".' },
+        code: { type: 'string', description: 'The new code.' },
+        before: { type: 'boolean', description: 'Insert before the symbol instead of after it.' }
+      },
+      required: ['agent', 'pointer', 'code']
+    }
+  },
+  {
+    name: 'memory_remember',
+    description:
+      'Store a fact about the project that every agent should start with ("tests need Postgres on 5477"). Keep it short and ' +
+      'lasting; per-task notes belong in memory_record.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id.' },
+        fact: { type: 'string', description: 'The fact, under 500 characters.' }
+      },
+      required: ['agent', 'fact']
+    }
+  },
+  {
+    name: 'memory_prime',
+    description:
+      'The start-of-session briefing: how to work here, project facts, who is active, which files are reserved, what work is ' +
+      'ready and whether messages wait for you. Call it first in a session.',
+    inputSchema: {
+      type: 'object',
+      properties: { agent: { type: 'string', description: 'Your agent id.' } }
+    }
   }
 ];
 
@@ -350,6 +484,7 @@ export async function callTool(
         reviewBy: optionalString(args, 'review_by'),
         reviewOpen: (args as Record<string, unknown> | null)?.review_open === true,
         reviewers: optionalNumber(args, 'reviewers'),
+        priority: optionalNumber(args, 'priority'),
         dependsOn: optionalString(args, 'after')
           ?.split(',')
           .map(id => id.trim())
@@ -421,6 +556,80 @@ export async function callTool(
     }
     case 'memory_log':
       return logText(service, args);
+    case 'memory_task_ready': {
+      const ready = await service.readyTasks(agentId());
+      if (ready.length === 0) return 'Nothing ready for you: every open task is blocked, assigned elsewhere or a review of your own work.';
+      return ready.map(t => `${t.id} [P${t.priority ?? 2}] ${t.title}${t.pointer ? ` (${formatPointer(t.pointer)})` : ''}`).join('\n');
+    }
+    case 'memory_reserve': {
+      const result = await service.reserve(agentId(), stringList(args, 'paths'), {
+        exclusive: args.shared !== true,
+        ttlSeconds: (optionalNumber(args, 'minutes') ?? 30) * 60,
+        reason: optionalString(args, 'reason')
+      });
+      if (result.conflicts.length > 0) {
+        return [
+          'Nothing reserved. Held by other agents:',
+          ...result.conflicts.map(c => `- ${c.pattern}: ${c.holder.agentId} holds ${c.holder.pattern} (${c.holder.exclusive ? 'exclusive' : 'shared'}) until ${c.holder.expiresAt}${c.holder.reason ? `: ${c.holder.reason}` : ''}`),
+          'Pick other work, or ask them with memory_send.'
+        ].join('\n');
+      }
+      return `Reserved ${result.granted.map(r => r.pattern).join(', ')} until ${result.granted[0].expiresAt}. Release with memory_release when done.`;
+    }
+    case 'memory_release': {
+      const paths = Array.isArray(args.paths) ? stringList(args, 'paths') : undefined;
+      return `Released ${await service.release(agentId(), paths)} reservation(s).`;
+    }
+    case 'memory_reservations': {
+      const active = await service.reservations.active();
+      if (active.length === 0) return 'No files reserved.';
+      return active.map(r => `${r.pattern}: ${r.agentId}, ${r.exclusive ? 'exclusive' : 'shared'} until ${r.expiresAt}${r.reason ? ` (${r.reason})` : ''}`).join('\n');
+    }
+    case 'memory_symbols': {
+      const file = requiredString(args, 'file');
+      const target = insideRoot(service.root, file);
+      const entries = outlineSymbols(await readFile(target, 'utf8'), file);
+      if (entries.length === 0) return `No declarations recognised in ${file}. Read it with memory_read_pointer "${file}".`;
+      return entries.map(e => `${e.declarationLine}-${e.endLine} ${e.kind} ${e.container ? `${e.container}.` : ''}${e.name}`).join('\n');
+    }
+    case 'memory_find_symbol': {
+      const matches = await findSymbol(service.root, requiredString(args, 'name'));
+      if (matches.length === 0) return 'Not found. Try memory_references, or a shorter name.';
+      return matches.map(m => `${m.pointer} (${m.kind}, lines ${m.declarationLine}-${m.endLine})`).join('\n');
+    }
+    case 'memory_references': {
+      const refs = await findReferences(service.root, requiredString(args, 'name'));
+      if (refs.length === 0) return 'No uses found outside its declaration.';
+      return refs.map(r => `${r.file}:${r.line}  ${r.text}`).join('\n');
+    }
+    case 'memory_replace_symbol':
+    case 'memory_insert_symbol': {
+      const agent = agentId();
+      const pointer = requiredString(args, 'pointer');
+      const file = pointer.split('::')[0];
+      // A reservation is a promise to the agent holding it; an edit by symbol keeps it too.
+      const holders = (await service.reservations.holders(file, agent)).filter(r => r.exclusive);
+      if (holders.length > 0) {
+        return `Not changed: ${file} is reserved by ${holders[0].agentId} until ${holders[0].expiresAt}. Pick other work, or ask them with memory_send.`;
+      }
+      const mode = name === 'memory_replace_symbol' ? 'replace' : args.before === true ? 'insert_before' : 'insert_after';
+      const result = await editSymbol(service.root, pointer, requiredString(args, 'code'), mode);
+      if (await service.store.stateExists(agent)) {
+        await service.activity({
+          agentId: agent,
+          type: 'CHANGED',
+          description: `${mode === 'replace' ? 'replaced' : 'inserted next to'} ${result.symbol}`,
+          pointer: { file: result.file, symbol: result.symbol }
+        });
+      }
+      return `${mode === 'replace' ? 'Replaced' : 'Inserted'} at ${result.file} lines ${result.fromLine}-${result.toLine}${result.removedLines ? ` (was ${result.removedLines} lines)` : ''}.`;
+    }
+    case 'memory_remember': {
+      const fact = await service.remember(requiredString(args, 'fact'), agentId());
+      return `Remembered (${fact.id}). Every session now starts with it.`;
+    }
+    case 'memory_prime':
+      return service.prime(pinnedAgent ?? optionalString(args, 'agent'));
     default:
       throw new RpcError(INVALID_PARAMS, `Unknown tool: ${name}`);
   }
@@ -637,6 +846,23 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
   const value = args[key];
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return value.trim();
+}
+
+function stringList(args: Record<string, unknown>, key: string): string[] {
+  const value = args[key];
+  const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  const clean = list.map(v => String(v).trim()).filter(Boolean);
+  if (clean.length === 0) throw new RpcError(INVALID_PARAMS, `Missing ${key}: give at least one path.`);
+  return clean;
+}
+
+/** A project-relative path resolved under the root; a path that escapes it is refused. */
+function insideRoot(root: string, file: string): string {
+  const base = path.resolve(root);
+  const target = path.resolve(base, file);
+  const relative = path.relative(base, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new RpcError(INVALID_PARAMS, `Outside the project: ${file}`);
+  return target;
 }
 
 function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {

@@ -112,8 +112,30 @@ export interface AgentTask {
   reviewers?: number;
   /** Set on a review task: which round of judging it belongs to, counting from 1. */
   reviewRound?: number;
+  /** 0 is the most urgent, 4 the least. Absent means 2. The queue hands out the most urgent first. */
+  priority?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FileReservation {
+  id: string;
+  agentId: string;
+  /** Project-relative path, folder or glob, with forward slashes. */
+  pattern: string;
+  /** Exclusive keeps every other agent out; shared keeps out only an exclusive claim. */
+  exclusive: boolean;
+  reason?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** A fact about the project worth knowing in every session, written by an agent or a person. */
+export interface ProjectFact {
+  id: string;
+  text: string;
+  createdBy: string;
+  createdAt: string;
 }
 
 export interface TaskSchedule {

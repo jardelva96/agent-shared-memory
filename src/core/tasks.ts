@@ -112,15 +112,7 @@ export class TaskStore {
       // A blocked task stays invisible to the queue rather than being handed out early.
       // This is what lets a plan run before the work, and a review run after it, without
       // anyone sequencing the waves by hand.
-      const done = new Set(tasks.filter(task => task.status === 'DONE').map(task => task.id));
-      const byId = new Map(tasks.map(task => [task.id, task]));
-      const candidate = tasks.find(
-        task =>
-          task.status === 'OPEN' &&
-          (!task.assignedTo || task.assignedTo === agentId) &&
-          dependenciesOf(task).every(id => done.has(id)) &&
-          !cannotJudge(task, agentId, byId, tasks)
-      );
+      const candidate = readyFor(tasks, agentId)[0];
       if (!candidate) return undefined;
 
       candidate.status = 'CLAIMED';
@@ -276,6 +268,26 @@ function cannotJudge(
       (other.reviewRound ?? 1) === round &&
       other.claimedBy === agentId
   );
+}
+
+/**
+ * The tasks `agentId` could claim right now, in the order the queue hands them out: most
+ * urgent first (priority 0 before 4), then oldest. Blocked work, work assigned to someone
+ * else and reviews of the agent's own work are left out. Without an agent, everything that
+ * nothing blocks and nobody holds.
+ */
+export function readyFor(tasks: AgentTask[], agentId?: string): AgentTask[] {
+  const done = new Set(tasks.filter(task => task.status === 'DONE').map(task => task.id));
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  return tasks
+    .filter(
+      task =>
+        task.status === 'OPEN' &&
+        (!task.assignedTo || !agentId || task.assignedTo === agentId) &&
+        dependenciesOf(task).every(id => done.has(id)) &&
+        (!agentId || !cannotJudge(task, agentId, byId, tasks))
+    )
+    .sort((a, b) => (a.priority ?? 2) - (b.priority ?? 2) || a.createdAt.localeCompare(b.createdAt));
 }
 
 /** Normalises the single-value form tasks written before dependsOn took a list. */
