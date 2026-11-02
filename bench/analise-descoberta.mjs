@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Summarises Test 4: for each model and question, the same question answered with a text
- * search kit and with the symbol kit. Pairs where both answered give the fair token ratio.
+ * Summarises Test 4: for each model and question, the same question answered with a text search kit
+ * and with the symbol kit.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';

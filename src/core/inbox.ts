@@ -10,11 +10,7 @@ interface Cursor {
   lastReadAt?: string;
 }
 
-/**
- * Per-agent message queues. Each recipient owns an append-only JSONL file plus a small
- * cursor recording the last message it acknowledged, so unread state survives restarts
- * without ever rewriting the message log.
- */
+/** Per-agent message queues. */
 export class InboxStore {
   constructor(public readonly root = process.cwd()) {}
 
@@ -75,11 +71,7 @@ export class InboxStore {
     }
   }
 
-  /**
-   * Drops already-read messages beyond the newest `keep`, so an inbox does not grow
-   * forever. Unread messages are never discarded: the recipient has not seen them yet.
-   * Returns how many were removed.
-   */
+  /** Drops already-read messages beyond the newest `keep`, so an inbox does not grow forever. */
   async trim(agentId: string, keep: number): Promise<number> {
     const p = this.paths;
     const file = this.messageFile(agentId);

@@ -52,13 +52,7 @@ export async function baselineOf(root: string): Promise<Map<string, string>> {
   return map;
 }
 
-/**
- * Runs one comparison against the working tree and records what it finds.
- *
- * Attribution is deliberately conservative: a change is credited to an agent only when
- * exactly one agent points at that file, either right now or in the recent journal.
- * Anything else is reported as undeclared or ambiguous rather than guessed at.
- */
+/** Runs one comparison against the working tree and records what it finds. */
 export async function runWatchPass(
   service: AgentMemoryService,
   seen: Map<string, string>,

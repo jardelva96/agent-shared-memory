@@ -1,15 +1,5 @@
 #!/usr/bin/env node
-/**
- * Test 4 -- finding code nobody pointed at.
- *
- * Test 1 handed the agent the file and the symbol. Here it gets only the question, which
- * names the function, and the project: it has to find the code first. Two tool kits:
- *   texto   -- search_text (a grep), read_file, list_files: what coding agents usually have;
- *   simbolo -- the same, plus find_symbol, list_symbols and read_pointer from this package.
- * Same questions, same models, tokens as billed, answers graded by the question files.
- *
- * Usage: BENCH_ENV_FILES="a/.env;b/.env" node bench/descoberta.mjs [--models gemini:gemini-3.1-flash-lite,...]
- */
+/** Test 4 -- finding code nobody pointed at. */
 import { readFile, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

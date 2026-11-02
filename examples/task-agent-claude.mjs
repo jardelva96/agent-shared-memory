@@ -1,22 +1,5 @@
 #!/usr/bin/env node
-/**
- * Executor that runs a Claude Code agent per task, joined to the shared memory.
- *
- * The point is not just to run a model on a task. The spawned agent is given this
- * project's MCP server with its identity pinned, so it can see what the other agents are
- * doing, declare intent before touching code, and be told when it overlaps with someone.
- * A blind executor would produce exactly the conflicts this project exists to surface.
- *
- * Usage (from `agent-memory run`):
- *   agent-memory run --agent BACK --exec "node examples/task-agent-claude.mjs"
- *
- * Environment:
- *   CLAUDE_AGENT_CLI     path to this project's CLI (default: "agent-memory")
- *   CLAUDE_AGENT_TOOLS   extra allowed tools, space separated (default: read/write/edit/search)
- *   CLAUDE_AGENT_BASH    "1" to also allow Bash — off by default, since a task can then
- *                        run anything the shell can
- *   CLAUDE_AGENT_MODEL   model alias passed to --model
- */
+/** Executor that runs a Claude Code agent per task, joined to the shared memory. */
 import { spawn } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -68,7 +51,7 @@ const tools = [
 const protocol = [
   `You are ${agent}, one of several agents working in this repository at the same time.`,
   'The agent-memory MCP server is your shared operational memory. Follow this cycle:',
-  '1. memory_status first — see who is touching what. Pass the file you plan to edit as `pointer`.',
+  '1. memory_status first: see who is touching what. Pass the file you plan to edit as `pointer`.',
   '2. memory_record type=INTENT before changing code, naming the exact file and symbol and why.',
   '3. Make only the change you announced.',
   '4. memory_record type=CHANGED (or CREATED/TESTING) immediately after, with the real result.',
@@ -89,8 +72,7 @@ const prompt = [
 
 const args = [
   '-p',
-  // JSON carries the token counts and cost, which is what makes the price of a task
-  // visible in the queue instead of a number nobody ever sees.
+  // JSON output carries the token counts and the cost.
   '--output-format',
   'json',
   '--mcp-config',
@@ -119,8 +101,7 @@ const exitCode = await new Promise(resolve => {
   child.on('close', code => {
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
     const report = summarise(out);
-    // Printed on stdout so the runner stores it as the task result: whoever queued the
-    // work sees what it cost without going to look for it.
+    // Printed on stdout so the runner stores the cost with the task result.
     console.log(report.answer);
     log(`${seconds}s | ${report.usage}`);
     resolve(report.failed ? 1 : code ?? 1);

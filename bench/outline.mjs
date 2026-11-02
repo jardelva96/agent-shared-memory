@@ -1,17 +1,5 @@
 #!/usr/bin/env node
-/**
- * How good is the symbol outline, measured against the compilers (no model involved).
- *
- *   cobertura -- of the declarations the compiler finds outside function bodies, how many
- *                the outline lists with the right name, line and end;
- *   precisao  -- of what the outline lists (of the kinds the compiler reports), how much is
- *                a real declaration on that line.
- *
- * A language server would get both right by construction; this is what the zero-install
- * heuristic gets, on real code.
- *
- * Usage: node --import tsx bench/outline.mjs <files.txt>
- */
+/** How good is the symbol outline, measured against the compilers (no model involved). */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';

@@ -1,5 +1,4 @@
 // Reference slices for C#, from Roslyn (the C# compiler itself).
-// Prints one JSON line per declaration: {file, name, nameLine, endLine}, 1-based.
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;

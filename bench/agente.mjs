@@ -1,11 +1,4 @@
-/**
- * The tool loop every benchmark agent runs, so the conditions differ only in what they set.
- *
- * Conditions are compared on the same questions, the same models, the same system prompt
- * and the same turn budget. What changes is which tools exist: an agent that can only read
- * whole files against one that can also read a pointer. Anything else that differed would
- * be measured along with it.
- */
+/** The tool loop every benchmark agent runs, so the conditions differ only in what they set. */
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -77,7 +70,7 @@ function inside(root, candidate) {
   return full;
 }
 
-/** Tool implementations. `extra` lets a caller add its own (run_tests, finish_review...). */
+/** Tool implementations. */
 export function makeTools(root, extra = {}) {
   return {
     async read_pointer({ pointer }) {
@@ -105,13 +98,7 @@ export function makeTools(root, extra = {}) {
   };
 }
 
-/**
- * Runs one agent to completion and returns what it cost and what it said.
- *
- * Usage is summed from the provider's own numbers on every call. Every call re-sends the
- * whole conversation, so a file read on turn 1 is paid for again on turns 2, 3 and 4 --
- * which is exactly the effect a per-call view would hide.
- */
+/** Runs one agent to completion and returns what it cost and what it said. */
 export async function runAgent({ provider, model, system, user, toolNames, root, extraTools, maxTurns = 8, maxTokens = 2048, stopAfter = ['finish_review'], meta, log }) {
   const impl = makeTools(root, extraTools);
   const tools = toolNames.map(name => extraTools?.[`${name}__def`] ?? TOOL_DEFS[name]);

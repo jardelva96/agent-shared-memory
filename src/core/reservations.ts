@@ -1,14 +1,6 @@
 /**
- * File reservations: an agent claims a file, a folder or a glob before changing it, for a
- * limited time, and the others are refused while the claim holds.
- *
- * A notice ("someone else is on this file") was measured not to be enough on its own: an
- * agent that had read the file earlier still wrote over a newer version. A reservation is
- * checked where writes happen -- the pre-write hook, the git pre-commit hook -- so it holds
- * without the model having to remember it.
- *
- * Every reservation expires. An agent that crashes while holding one blocks nobody for
- * longer than its lease, the same rule the task queue uses for claims.
+ * File reservations: an agent claims a file, a folder or a glob before changing it, for a limited
+ * time, and the others are refused while the claim holds.
  */
 import path from 'node:path';
 import { FileReservation } from '../models/types.js';
@@ -63,7 +55,7 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${out}$`, 'i');
 }
 
-/** Whether a path is covered by a reservation pattern. A plain folder path covers its contents. */
+/** Whether a path is covered by a reservation pattern. */
 export function patternCovers(pattern: string, file: string): boolean {
   if (WILD.test(pattern)) return globToRegExp(pattern).test(file);
   const a = pattern.toLowerCase();
@@ -71,11 +63,7 @@ export function patternCovers(pattern: string, file: string): boolean {
   return a === b || b.startsWith(`${a}/`);
 }
 
-/**
- * Whether two patterns can name a common file. Conservative for two globs: they overlap
- * when one's fixed prefix contains the other's, which may refuse a pair that never meets,
- * but never lets two exclusive claims cover the same file.
- */
+/** Whether two patterns can name a common file. */
 export function patternsOverlap(a: string, b: string): boolean {
   const wildA = WILD.test(a);
   const wildB = WILD.test(b);
@@ -116,7 +104,7 @@ export class ReservationStore {
     await atomicWriteJson(this.file, { reservations: list });
   }
 
-  /** Reservations still in force. Expired ones are ignored here and dropped on the next write. */
+  /** Reservations still in force. */
   async active(now = new Date()): Promise<FileReservation[]> {
     return (await this.load()).filter(r => Date.parse(r.expiresAt) > now.getTime());
   }
@@ -171,7 +159,7 @@ export class ReservationStore {
     });
   }
 
-  /** Releases the agent's reservations on these patterns, or all of them. Returns how many. */
+  /** Releases the agent's reservations on these patterns, or all of them. */
   async release(agentId: string, patterns?: string[]): Promise<number> {
     const which = patterns?.length ? new Set(patterns.map(normalizePattern)) : undefined;
     return withFileLock(this.lock, async () => {
@@ -183,7 +171,7 @@ export class ReservationStore {
     });
   }
 
-  /** Extends every reservation the agent holds. Returns how many. */
+  /** Extends every reservation the agent holds. */
   async renew(agentId: string, ttlSeconds = DEFAULT_RESERVATION_SECONDS): Promise<number> {
     return withFileLock(this.lock, async () => {
       const now = Date.now();

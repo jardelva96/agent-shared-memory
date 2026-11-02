@@ -4,11 +4,7 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-/**
- * Flags that never take a value. Without this list a boolean flag placed before the
- * command would swallow it: `--json status` would parse as json="status" and leave no
- * command at all.
- */
+/** Flags that never take a value. */
 const BOOLEAN_FLAGS = new Set([
   'json',
   'force',
@@ -24,12 +20,7 @@ const BOOLEAN_FLAGS = new Set([
   'apply'
 ]);
 
-/**
- * The command is the first bare word, wherever it appears, so global flags work on either
- * side of it: `agent-memory --root X status` and `agent-memory status --root X` are the
- * same. Flag values are consumed before the search, so `--root status` does not mistake
- * the path for the command.
- */
+/** The command is the first bare word, so global flags may come before or after it. */
 /** Every flag the CLI understands, so a typo fails instead of being ignored. */
 const KNOWN_FLAGS = new Set([
   ...BOOLEAN_FLAGS,
@@ -100,9 +91,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     if (BOOLEAN_FLAGS.has(key)) {
-      // An explicit value has to be honoured, in either form. Swallowing it and forcing
-      // true meant `compact --history false` rotated every history the user just said not
-      // to touch, and `register --force false` reset a live agent.
+      // An explicit value has to be honoured, in either form.
       const spaced = inlineValue === undefined && isBooleanWord(argv[i + 1]) ? argv[++i] : undefined;
       const value = inlineValue ?? spaced;
       flags[key] = value === undefined ? true : value !== 'false' && value !== '0';

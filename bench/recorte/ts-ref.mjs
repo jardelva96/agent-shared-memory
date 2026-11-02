@@ -1,10 +1,4 @@
-/**
- * Reference slices for TypeScript/JavaScript, from the TypeScript compiler itself.
- *
- * Prints one JSON line per declaration: { file, name, nameLine, endLine }, 1-based. The
- * compiler is the ground truth extractSymbol is measured against, so nothing here may
- * share its heuristics.
- */
+/** Reference slices for TypeScript/JavaScript, from the TypeScript compiler itself. */
 import ts from 'typescript';
 import { readFileSync } from 'node:fs';
 
@@ -50,9 +44,8 @@ for (const file of process.argv.slice(2)) {
       // `const x = ...;` -- the statement, so the trailing semicolon counts as its end.
       emit(node.declarationList.declarations[0].name, node, "VariableStatement");
     }
-    // Anything declared inside a function body is an implementation detail, not part of the
-    // file's outline; it is marked so an outline is not charged for leaving it out.
-    // A bare `{ }` block (generated type checks) scopes its declarations the same way.
+    // Anything declared inside a function body is an implementation detail, not part of the file's
+    // outline; it is marked so an outline is not charged for leaving it out.
     const fnLike = (ts.isFunctionLike(node) && !ts.isConstructorTypeNode(node)) || (ts.isBlock(node) && ts.isSourceFile(node.parent));
     const was = nested;
     if (fnLike) nested = true;

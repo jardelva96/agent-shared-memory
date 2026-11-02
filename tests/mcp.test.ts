@@ -314,7 +314,7 @@ test('a pointer reads the symbol, not the file around it', async () => {
 test('a pointer cannot read outside the project', async () => {
   await withServer(async (call, _methods, service) => {
     await service.init('Pointer');
-    // The pointer comes from a model, and a model told the wrong thing asks for anything.
+    // The pointer comes from a model, so it may point anywhere.
     for (const escape of ['../../../etc/passwd', '../outside.txt']) {
       const denied = await call('memory_read_pointer', { pointer: escape });
       assert.equal(denied.isError, true, `${escape} must be refused`);

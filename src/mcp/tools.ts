@@ -31,9 +31,8 @@ export interface ToolDefinition {
 }
 
 /**
- * When the server is started with --agent, the id is fixed for the whole connection and
- * the `agent` parameter disappears from every schema. That removes the failure mode where
- * a model invents its own id, forgets it mid-session, or collides with another agent.
+ * When the server is started with --agent, the id is fixed for the whole connection and the `agent`
+ * parameter disappears from every schema.
  */
 export function buildTools(pinnedAgent?: string): ToolDefinition[] {
   if (!pinnedAgent) return TOOLS;
@@ -191,7 +190,7 @@ export const TOOLS: ToolDefinition[] = [
       'Queue work for another agent to pick up later. Unlike a message, a task persists until someone claims and finishes it, ' +
       'so use it for work that must survive this session. Assign it with `for` when a specific agent must do it; leave it open otherwise. ' +
       'To split a demand: queue one task per independent part, then queue the task that puts the parts together with `after` ' +
-      'listing all of them — it stays out of the queue until every part has landed.',
+      'listing all of them; it stays out of the queue until every part has landed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -515,14 +514,11 @@ export async function callTool(
           ?.split(',')
           .map(id => id.trim())
           .filter(Boolean),
-        // Set when this server was launched by a runner: the queue then knows this task
-        // is one generation deeper, and the depth limit applies without the model
-        // having to be aware of it at all.
+        // Set by the runner, so tasks created here count one generation deeper.
         parentTaskId: process.env.AGENT_TASK_ID || undefined
       });
       const review = task.reviewTaskId ? ` Review queued as ${task.reviewTaskId}.` : '';
-      // Said back explicitly: a task queued with `after` will not be picked up now, and an
-      // agent that expected it to run would otherwise read the silence as something broken.
+      // Say explicitly that a task queued with `after` waits for its dependencies.
       const waiting = dependenciesOf(task);
       const blocked = waiting.length ? ` Waiting for ${waiting.join(', ')}.` : '';
       return `Queued ${task.id}: ${task.title}${task.assignedTo ? ` (for ${task.assignedTo})` : ''} at depth ${task.depth}.${blocked}${review}`;
@@ -550,11 +546,7 @@ export async function callTool(
       if (task.detail) lines.push(task.detail);
       if (task.pointer) lines.push(`Pointer: ${formatPointer(task.pointer)}`);
 
-      // A task that waited for others exists to put their results together, and nothing
-      // else in the tool surface can read a result. Without this the agent claiming a
-      // synthesis is handed the question with the answers withheld: it either redoes the
-      // parts or reports that the workers said nothing. Delivered here rather than in the
-      // listing so only the agent that actually needs them pays for the tokens.
+      // Include the results of the tasks this one waited for, only for the agent that claims it.
       const waited = dependenciesOf(task);
       if (waited.length > 0) {
         lines.push('', 'Results of the parts this task waited for:');
@@ -633,7 +625,7 @@ export async function callTool(
       const agent = agentId();
       const pointer = requiredString(args, 'pointer');
       const file = pointer.split('::')[0];
-      // A reservation is a promise to the agent holding it; an edit by symbol keeps it too.
+      // Edits by symbol respect reservations too.
       const holders = (await service.reservations.holders(file, agent)).filter(r => r.exclusive);
       if (holders.length > 0) {
         return `Not changed: ${file} is reserved by ${holders[0].agentId} until ${holders[0].expiresAt}. Pick other work, or ask them with memory_send.`;
@@ -778,8 +770,7 @@ async function recordText(
       'Do not undo their work. Adjust your change to coexist, or record a WAITING entry naming the agent you depend on.'
     );
   }
-  // Someone may have arrived on this agent's file since it last looked; that notice is only
-  // useful if it is seen before the next write, and recording is the call agents make.
+  // Report unread messages here: recording is the call agents make before writing.
   const unread = await service.messages.unreadCount(agentId);
   if (unread > 0) lines.push('', `You have ${unread} unread message(s). Call memory_inbox before writing.`);
   return lines.join('\n');
@@ -812,13 +803,7 @@ function agentBlock(state: AgentState, config: ProjectConfig, unread = 0): strin
 
 const MAX_POINTER_READ_BYTES = 200_000;
 
-/**
- * Returns the source a pointer names, narrowed to the symbol when there is one.
- *
- * Reads are confined to the project root. A pointer arrives from a model, and a model that
- * has been told the wrong thing will happily ask for `../../.ssh/id_rsa`; resolving under
- * the root and comparing the result is what keeps that from being a file read.
- */
+/** Returns the source a pointer names, narrowed to the symbol when there is one. */
 async function readPointerText(service: AgentMemoryService, raw: string): Promise<string> {
   const pointer = parsePointer(raw);
   if (!pointer?.file) {
@@ -837,8 +822,7 @@ async function readPointerText(service: AgentMemoryService, raw: string): Promis
     const info = await stat(target);
     if (!info.isFile()) throw new Error('not a file');
     if (info.size > MAX_POINTER_READ_BYTES) {
-      // Without the symbol there is nothing to narrow to, and handing back a megabyte
-      // defeats the point of the tool.
+      // Without a symbol, cap the size of the file returned.
       if (!pointer.symbol) {
         throw new Error(`${pointer.file} is ${Math.round(info.size / 1024)}kB. Point at a symbol to read part of it.`);
       }

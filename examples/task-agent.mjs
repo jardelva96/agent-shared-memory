@@ -1,23 +1,5 @@
 #!/usr/bin/env node
-/**
- * Reference executor for `agent-memory run`.
- *
- * The runner hands one task to one process through the environment. This script turns
- * that into a prompt, feeds it to an agent CLI **on stdin**, and writes whatever comes
- * back to `outputs/<task-id>.md`.
- *
- * Why stdin rather than an argument: the task title and detail are written by another
- * agent. Putting them on a command line means quoting rules, shell metacharacters and
- * platform differences all get a say in what runs. Writing them to stdin has none of
- * that surface — the text is data the whole way down.
- *
- * Usage:
- *   TASK_AGENT_CMD="claude -p"                  agent-memory run --agent W --exec "node examples/task-agent.mjs"
- *   TASK_AGENT_CMD="ollama run llama3.1:8b"     agent-memory run --agent W --exec "node examples/task-agent.mjs"
- *
- * Set TASK_AGENT_DELEGATE=1 to let the agent split a top-level task into child tasks
- * instead of doing it directly. Depth is enforced by the queue, not by this script.
- */
+/** Reference executor for `agent-memory run`. */
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -45,21 +27,15 @@ if (!title) {
   process.exit(2);
 }
 
-/**
- * Removes terminal control sequences.
- *
- * Several agent CLIs draw a spinner or colour their output even when stdout is a pipe
- * (`ollama run` is one). Without this the "deliverable" would be full of escape codes.
- */
+/** Removes terminal control sequences. */
 function stripAnsi(text) {
   return text
     .replace(/\[[0-9;?]*[A-Za-z]/g, '')
     .replace(/\][^]*/g, '')
     .replace(/[⠀-⣿]/g, '') // braille spinner frames
     .split('\n')
-    // A carriage return means the terminal redrew the line, so only what follows the
-    // last one survived on screen. Dropping just the character would splice a
-    // half-written line onto the final one.
+    // A carriage return means the terminal redrew the line, so only what follows the last one
+    // survived on screen.
     .map(line => (line.includes('\r') ? line.slice(line.lastIndexOf('\r') + 1) : line))
     .join('\n');
 }

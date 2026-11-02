@@ -1,16 +1,6 @@
 /**
- * Working with code by symbol instead of by file: what a file declares, where a name is
- * declared across the project, where it is used, and changing one symbol in place.
- *
- * It needs no language server, so it works the moment the package is installed, in any of
- * the languages extractSymbol reads. The price is that it is a heuristic: it is measured
- * against the compilers' own spans in bench/, and it says "not found" rather than guess.
- *
- * The edit is the part that matters for several agents. An agent that rewrites a whole file
- * from a copy it read earlier erases whatever another agent changed in between -- measured,
- * not hypothetical. An edit here names one symbol, re-reads the file under a lock at the
- * moment it applies, and replaces only that symbol's lines, so two agents changing two
- * functions of the same file both keep their work.
+ * Working with code by symbol instead of by file: what a file declares, where a name is declared
+ * across the project, where it is used, and changing one symbol in place.
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -62,10 +52,8 @@ const MODIFIERS =
 // A type as C# and TypeScript write it before a name: `Task<(int, string)>`, `string?`,
 // `Dictionary<string, DateTime>`, `int[]`, or a tuple `(string Texto, int N)`.
 const TYPE = '(?:[\\w$.?]+(?:<[^=;{}]*>)?(?:\\[\\])*\\??|\\([^()]*\\)(?:\\[\\])*\\??)\\s+';
-// Anchored at the start of the line, after modifiers only: `(object linha` in a parameter
-// list is not a declaration of `linha`.
-// Also after `;`, `}` or a decorator's `)`: compacted files put several declarations on one
-// line (`@Injectable()export class Guard{...}`).
+// Anchored at the start of the line, after modifiers only: `(object linha` in a parameter list is
+// not a declaration of `linha`.
 const LEAD = '(?:^|[;})])\\s*';
 const TYPE_WORDS = new RegExp(`${LEAD}${MODIFIERS}(class|interface|struct|record|enum|trait|namespace|module|impl)\\s+([A-Za-z_$][\\w$]*)`);
 const FUNCTION_WORDS = new RegExp(`${LEAD}${MODIFIERS}(?:function\\*?|def|fn|func|fun)\\s+([A-Za-z_$][\\w$]*)`);
@@ -89,11 +77,7 @@ const ACCESSORS = new Set(['get', 'set', 'init', 'add', 'remove', 'value'
 
 type Block = 'ns' | 'type' | 'enum' | 'body';
 
-/**
- * The declarations of a file a reader would want to see first: everything at the top level,
- * and the members of the types declared there. What is declared inside a function body is
- * an implementation detail, and listing it would bury the outline.
- */
+/** Top-level declarations of a file and the members of its types. */
 export function outlineSymbols(source: string, file = ''): OutlineEntry[] {
   const lines = source.split('\n').map(line => line.replace(/\r$/, ''));
   return /\.py$/i.test(file) || (!/[{}]/.test(source) && /^\s*(def|class)\s/m.test(source))
@@ -313,7 +297,7 @@ function bareName(symbol: string): string {
   return (segments[segments.length - 1] ?? '').trim();
 }
 
-/** Where `symbol` is declared, across the project. A qualified name (`Order.Cancel`) narrows by container. */
+/** Where `symbol` is declared, across the project. */
 export async function findSymbol(root: string, symbol: string, limit = 20): Promise<SymbolMatch[]> {
   const name = bareName(symbol);
   const qualifier = symbol.includes('.') ? symbol.split('(')[0].split('.').slice(-2, -1)[0] : undefined;
@@ -353,15 +337,7 @@ export async function findReferences(root: string, symbol: string, limit = 100):
   return found;
 }
 
-/**
- * Changes one symbol of a file in place: replaces it, or inserts code right after or before it.
- *
- * The file is read under a lock at the moment the edit applies -- never from a copy the
- * agent read earlier -- so a change another agent made elsewhere in the file survives. Code
- * written without indentation is indented like the symbol it replaces. When the new code
- * brings its own doc comment, attribute or decorator, it replaces the old one instead of
- * stacking on top of it.
- */
+/** Changes one symbol of a file in place: replaces it, or inserts code right after or before it. */
 export async function editSymbol(
   root: string,
   pointer: string,
@@ -416,9 +392,7 @@ export async function editSymbol(
 
     const next = lines.join(eol);
     const relPosix = rel.split(path.sep).join('/');
-    // A change that turns a file that parsed into one that does not is refused, with the
-    // line: the agent fixes it now, and nobody sharing the file inherits it. A file that was
-    // already broken is not held to it -- the edit may be the fix.
+    // Refuse a change that breaks a file that parsed before.
     if (options.checkSyntax !== false) {
       const after = await syntaxProblem(relPosix, next, base);
       if (after && !(await syntaxProblem(relPosix, source, base))) {
@@ -445,14 +419,7 @@ export interface RenamePlan {
   applied: boolean;
 }
 
-/**
- * Renames a symbol everywhere it is used, as a plan first and on disk only when asked.
- *
- * Without a type checker a use is a matching word outside strings and comments, so a name
- * declared more than once in the project is refused: it cannot be told which of them a use
- * means, and a wrong rename is worse than none. Each file is re-read under the edit lock and
- * syntax-checked before it is written.
- */
+/** Renames a symbol everywhere it is used, as a plan first and on disk only when asked. */
 export async function renameSymbol(root: string, symbol: string, to: string, options: { apply?: boolean } = {}): Promise<RenamePlan> {
   const from = bareName(symbol);
   const plan: RenamePlan = { from, to, changes: [], applied: false };

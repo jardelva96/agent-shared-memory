@@ -23,12 +23,7 @@ export class RpcError extends Error {
 export type MethodHandler = (params: unknown) => Promise<unknown>;
 export type MethodMap = Map<string, MethodHandler>;
 
-/**
- * Minimal JSON-RPC 2.0 server over newline-delimited stdin/stdout.
- *
- * stdout is the protocol channel: nothing else may write to it while the
- * server runs. Diagnostics go to stderr.
- */
+/** Minimal JSON-RPC 2.0 server over newline-delimited stdin/stdout. */
 export class StdioServer {
   private queue: Promise<void> = Promise.resolve();
 
@@ -37,9 +32,7 @@ export class StdioServer {
   start(): void {
     const reader = createInterface({ input: process.stdin });
     reader.on('line', line => {
-      // Chained so requests are processed in arrival order. The catch is what keeps the
-      // chain alive: a rejected queue would skip every .then() queued after it, and an
-      // unhandled rejection aborts the process outright on Node >= 20.
+      // Chained so requests are processed in arrival order.
       this.queue = this.queue
         .then(() => this.handleLine(line))
         .catch(error => {
@@ -64,9 +57,7 @@ export class StdioServer {
       return;
     }
 
-    // A batch is a JSON-RPC array. Answering it with a single "must be an object" error
-    // is indistinguishable from every request in it failing, so it is refused explicitly:
-    // MCP dropped batching, and pretending to support it would be worse than saying so.
+    // A batch is a JSON-RPC array.
     if (Array.isArray(parsed)) {
       this.write({
         jsonrpc: '2.0',
@@ -79,9 +70,7 @@ export class StdioServer {
       return;
     }
 
-    // Valid JSON is not necessarily a request. `null`, a number or a string carries no id
-    // to answer with, so it is refused here rather than read as a notification --
-    // reading `.id` off `null` used to throw and poison the queue.
+    // Valid JSON is not necessarily a request.
     if (typeof parsed !== 'object' || parsed === null) {
       this.write({
         jsonrpc: '2.0',
@@ -91,8 +80,7 @@ export class StdioServer {
       return;
     }
 
-    // A wrong protocol version is a mistake worth naming: silently accepting it would
-    // hide a client talking a different dialect until something subtler broke.
+    // Reject unknown protocol versions instead of guessing.
     const version = (parsed as JsonRpcMessage).jsonrpc;
     if (version !== undefined && version !== '2.0') {
       this.write({

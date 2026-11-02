@@ -33,7 +33,7 @@ test('weekday scheduling lands on the right day', () => {
 test('when both day fields are restricted, either one matching is enough', () => {
   // Standard cron: day-of-month 1 OR Monday, not both.
   const result = next('0 0 1 * 1', '2026-03-02T12:00:00');
-  // 2026-03-09 is the next Monday; 2026-04-01 is the next 1st. The Monday wins.
+  // 2026-03-09 is the next Monday; 2026-04-01 is the next 1st.
   assert.deepEqual(result, at('2026-03-09T00:00:00'));
 });
 

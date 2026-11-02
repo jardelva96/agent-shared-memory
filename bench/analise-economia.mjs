@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * Summarises Test 1 from runs.jsonl: per model and condition, how often the answer was
- * right and what it cost, plus a paired comparison -- the same model, question and
- * repetition under both conditions -- which is the fair way to read a token ratio.
+ * Summarises Test 1 from runs.jsonl: per model and condition, how often the answer was right and
+ * what it cost, plus a paired comparison -- the same model, question and repetition under both
+ * conditions -- which is the fair way to read a token ratio.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-// Graded again from the question files, so a pattern fixed after the run applies to every
-// answer alike rather than only to the runs that came after the fix.
+// Graded again from the question files, so a fixed pattern applies to every answer.
 const questions = new Map(
   ['perguntas.json', 'perguntas-locais.json']
     .flatMap(f => {

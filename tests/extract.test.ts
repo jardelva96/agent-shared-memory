@@ -154,8 +154,7 @@ test('it holds up on this repository, which is what it exists for', async () => 
 });
 
 test('a body that opens and closes on one line stops there', () => {
-  // Found by installing the package and calling it: the line ends in "}" rather than ";",
-  // so the statement scan ran past it and took the next declaration with it.
+  // The line ends in "}" rather than ";": the scan must not run into the next declaration.
   const source = ['export function alvo() { return 1; }', 'const outro = 2;', 'function depois() {}'].join('\n');
   const found = extractSymbol(source, 'alvo')!;
   assert.equal(found.text, 'export function alvo() { return 1; }');
@@ -169,9 +168,7 @@ test('a brace inside a string on the declaration line is not a body', () => {
 });
 
 test('a C# body that opens on the next line comes back whole', () => {
-  // Found on a real .NET project: with "{" on its own line the declaration balanced on
-  // the first line, so the slice ended after the first statement -- or, for a signature
-  // spanning two lines, before the body even started.
+  // With "{" on its own line (Allman style) the slice must still include the body.
   const source = [
     'public sealed class Clube',
     '{',

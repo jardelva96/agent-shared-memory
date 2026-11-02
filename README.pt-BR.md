@@ -37,7 +37,7 @@ A proposta é simples: antes de uma alteração relevante, o agente anuncia **o 
   dependências, `task ready`, `task show` (a história inteira de uma tarefa) e revisão que nunca
   vai para quem fez o trabalho, decidida por maioria quando você pede um painel.
 
-### Medido, não prometido
+### Resultados medidos
 
 Todo número vem de `bench/` e pode ser medido de novo (detalhes no [CHANGELOG.md](CHANGELOG.md)):
 
@@ -76,7 +76,7 @@ Este projeto resolve isso com uma coordenação simples, local-first e auditáve
 - Linguagem: TypeScript, Node.js 20+.
 - Pacote: `agent-shared-memory`.
 - Binário: `agent-memory`.
-- Versão atual: `1.2.0`.
+- Versão atual: `1.3.0`.
 - Testes locais: `npm test`.
 - Build: `npm run build`.
 
@@ -252,7 +252,7 @@ agent-memory done \
 
 Um id pode conter letras, dígitos, ponto, traço e sublinhado, com pelo menos uma letra ou dígito. Qualquer outra coisa é **recusada**, não corrigida.
 
-Isso é deliberado: o id vira nome de arquivo. Se `AGENT/01` fosse sanitizado para `AGENT-01`, os dois passariam a compartilhar estado, histórico e caixa de entrada — e `unregister("AGENT/01")` apagaria o registro do `AGENT-01`. Recusar é a única forma de garantir que os dados de um agente sejam dele.
+Isso é deliberado: o id vira nome de arquivo. Se `AGENT/01` fosse sanitizado para `AGENT-01`, os dois passariam a compartilhar estado, histórico e caixa de entrada, e `unregister("AGENT/01")` apagaria o registro do `AGENT-01`. Recusar é a única forma de garantir que os dados de um agente sejam dele.
 
 Ids são exclusivos: registrar um id que já existe falha, para que dois agentes diferentes não passem a compartilhar estado por acidente.
 
@@ -268,7 +268,7 @@ Quando um agente sai de vez, remova-o do painel:
 agent-memory unregister --agent AGENT-01
 ```
 
-O `unregister` apaga apenas o estado. O histórico continua como trilha de auditoria, e o journal recebe um evento `UNREGISTERED`. Se o mesmo id for registrado de novo depois, o histórico anterior é mantido e a nova sessão entra abaixo de um separador — o arquivo nunca é sobrescrito.
+O `unregister` apaga apenas o estado. O histórico continua como trilha de auditoria, e o journal recebe um evento `UNREGISTERED`. Se o mesmo id for registrado de novo depois, o histórico anterior é mantido e a nova sessão entra abaixo de um separador: o arquivo nunca é sobrescrito.
 
 ## Journal de eventos
 
@@ -288,9 +288,9 @@ O journal é arquivado sozinho ao passar de `autoCompactAfterEvents` (padrão 50
 agent-memory config --auto-compact 5000   # 0 desliga
 ```
 
-Isso não é só arrumação. Toda escrita regenera o painel, e regenerar lê o journal inteiro — então o journal em crescimento encarece **toda escrita de todo agente**. Medido: sem compactação, a latência por escrita passou de 6,8 ms (2 mil eventos) para 12,7 ms (40 mil) e continuava subindo; com ela ligada, fica em ~6 ms independentemente do volume acumulado, porque o journal vivo estabiliza.
+A compactação também mantém as escritas rápidas. Toda escrita regenera o painel, e regenerar lê o journal inteiro, então o journal em crescimento encarece **toda escrita de todo agente**. Medido: sem compactação, a latência por escrita passou de 6,8 ms (2 mil eventos) para 12,7 ms (40 mil) e continuava subindo; com ela ligada, fica em ~6 ms independentemente do volume acumulado, porque o journal vivo estabiliza.
 
-O gatilho é gratuito: a regeneração do painel já leu o journal, então o tamanho vem junto, sem uma segunda leitura. Vários agentes podem disparar ao mesmo tempo — o arquivamento é idempotente sob lock, então o primeiro corta e os demais não encontram nada a fazer.
+O gatilho é gratuito: a regeneração do painel já leu o journal, então o tamanho vem junto, sem uma segunda leitura. Vários agentes podem disparar ao mesmo tempo: o arquivamento é idempotente sob lock, então o primeiro corta e os demais não encontram nada a fazer.
 
 ### Manual
 
@@ -304,7 +304,7 @@ agent-memory compact --keep 500 --history
 
 - os eventos além dos `--keep` mais recentes vão para `.agents/events/archive/`;
 - com `--history`, cada `history/AGENT-X.md` vai para `.agents/history/archive/` e um arquivo novo é aberto apontando para o arquivado;
-- cada caixa de entrada é reduzida a `--keep` mensagens, mas **somente as já lidas são descartadas** — uma mensagem que o destinatário ainda não viu nunca é removida, mesmo que isso deixe a caixa acima do limite;
+- cada caixa de entrada é reduzida a `--keep` mensagens, mas **somente as já lidas são descartadas**: uma mensagem que o destinatário ainda não viu nunca é removida, mesmo que isso deixe a caixa acima do limite;
 - `--dry-run` mostra o que seria feito sem escrever nada.
 
 ## Espera por outro agente
@@ -335,11 +335,11 @@ agent-memory inbox --agent AGENT-03 --peek     # lê sem marcar
 agent-memory inbox --agent AGENT-03 --all      # caixa inteira
 ```
 
-Cada destinatário tem uma fila append-only em `.agents/inbox/`, com um cursor separado registrando a última mensagem confirmada — o log de mensagens nunca é reescrito.
+Cada destinatário tem uma fila append-only em `.agents/inbox/`, com um cursor separado registrando a última mensagem confirmada; o log de mensagens nunca é reescrito.
 
 A contagem de não lidas aparece onde o agente já olha, e não só em quem roda `inbox`: na coluna `INBOX` do `status`, no `memory_status` do MCP e no painel. Uma caixa de entrada que exige lembrar de consultar não seria lida.
 
-Entrega para um agente não registrado é recusada. Uma espera por um agente inexistente continua sendo registrada — só não tem para onde entregar.
+Entrega para um agente não registrado é recusada. Uma espera por um agente inexistente continua sendo registrada, só não tem para onde entregar.
 
 ## Heartbeat
 
@@ -368,13 +368,13 @@ WARNING: 1 active overlap(s) detected:
 - AGENT-01 [WORKING] EXACT src/Orders/OrderService.cs -> OrderService.CancelAsync(Guid orderId)
 ```
 
-O objetivo é **consciência compartilhada**, não locking autoritário.
+O objetivo é **consciência compartilhada**, não uma trava rígida.
 
 O aviso na CLI cobre quem está escrevendo naquele momento. Para ver todas as sobreposições ativas do projeto de uma vez, use o dashboard ou `GET /api/snapshot`.
 
 ## Fila de trabalho, runner e agendamento
 
-Uma mensagem se perde se ninguém ler; uma **tarefa** fica na fila até alguém reivindicar e concluir. É a forma de delegar trabalho que **sobrevive à sessão** — inclusive entre ferramentas diferentes (Claude Code, Codex, Cursor) no mesmo repositório.
+Uma mensagem se perde se ninguém ler; uma **tarefa** fica na fila até alguém reivindicar e concluir. É a forma de delegar trabalho que **sobrevive à sessão**, inclusive entre ferramentas diferentes (Claude Code, Codex, Cursor) no mesmo repositório.
 
 ```bash
 agent-memory task create --agent AGENT-01 --title "Documentar parseArgs" \
@@ -387,7 +387,7 @@ agent-memory task done --id T-XXXX --message "README atualizado"
 agent-memory task fail --id T-XXXX --message "faltou credencial"
 ```
 
-Uma tarefa com `--for` só pode ser reivindicada pelo agente indicado, e chega também na caixa de entrada dele. Ao terminar, quem pediu recebe o resultado — inclusive quando falha.
+Uma tarefa com `--for` só pode ser reivindicada pelo agente indicado, e chega também na caixa de entrada dele. Ao terminar, quem pediu recebe o resultado, inclusive quando falha.
 
 ### Quem faz e quem confere
 
@@ -398,7 +398,7 @@ agent-memory task create --agent LEAD --for DEV --review-by QA \
   --title "Implementar mediana(lista)" --detail "..."
 ```
 
-Se a revisão reprovar, o trabalho volta para a fila com a objeção anexada ao `detail` — quem repegar começa da objeção, não do zero — e **uma nova revisão é enfileirada** para a próxima rodada. O portão não abre depois da primeira rejeição.
+Se a revisão reprovar, o trabalho volta para a fila com a objeção anexada ao `detail` (quem repegar começa da objeção, não do zero) e **uma nova revisão é enfileirada** para a próxima rodada. O portão não abre depois da primeira rejeição.
 
 Quando qualquer agente capaz pode conferir, use `--review` para deixar a revisão aberta. Para trabalho caro de errar, `--reviewers N` cria um painel aberto de 1 a 9 revisores e decide por maioria:
 
@@ -429,7 +429,7 @@ agent-memory task create --agent LEAD --for REV --depends-on "$A,$B" \
   --title "Conferir o conjunto"
 ```
 
-Quem reivindica a síntese recebe **os resultados das partes junto com o claim** — sem isso o agente receberia a pergunta com as respostas escondidas. Uma parte que falha mantém a síntese bloqueada: não há o que sintetizar de trabalho que não aconteceu.
+Quem reivindica a síntese recebe **os resultados das partes junto com o claim**; sem isso o agente receberia a pergunta com as respostas escondidas. Uma parte que falha mantém a síntese bloqueada: não há o que sintetizar de trabalho que não aconteceu.
 
 Um `--depends-on` para um id inexistente é recusado na criação: ele nunca ficaria `DONE`, então a tarefa esperaria para sempre parecendo saudável na listagem.
 
@@ -450,11 +450,11 @@ AGENT_TASK_DETAIL  AGENT_TASK_POINTER  AGENT_TASK_POINTER_FILE
 AGENT_TASK_DEPTH  AGENT_TASK_ATTEMPT
 ```
 
-O motivo é direto: o título é escrito por outro agente. Interpolá-lo no comando deixaria texto enfileirado virar código. Apenas `{{task_id}}` e `{{task_depth}}` são substituídos no comando, porque têm charset validado e não podem carregar sintaxe de shell — o que também evita a armadilha de escrever `$AGENT_TASK_ID` num comando que roda sob `cmd.exe` no Windows.
+O motivo é direto: o título é escrito por outro agente. Interpolá-lo no comando deixaria texto enfileirado virar código. Apenas `{{task_id}}` e `{{task_depth}}` são substituídos no comando, porque têm charset validado e não podem carregar sintaxe de shell, o que também evita a armadilha de escrever `$AGENT_TASK_ID` num comando que roda sob `cmd.exe` no Windows.
 
 O comando roda com `cwd` na raiz do projeto, então use `--root .` ao chamar a própria CLI de dentro dele.
 
-Exit 0 conclui a tarefa; qualquer outro código a marca como `FAILED`, guardando a saída. Um comando travado é morto por `--timeout` (padrão: a duração do claim), **junto com toda a árvore de processos** — matar só o shell deixaria o comando real vivo como neto.
+Exit 0 conclui a tarefa; qualquer outro código a marca como `FAILED`, guardando a saída. Um comando travado é morto por `--timeout` (padrão: a duração do claim), **junto com toda a árvore de processos**: matar só o shell deixaria o comando real vivo como neto.
 
 ### Executores prontos
 
@@ -471,7 +471,7 @@ agent-memory run --agent WORKER --exec "node examples/task-agent-ollama.mjs"
 
 Ambos leem a tarefa do ambiente, escrevem o entregável em `outputs/<id>.md` e saem com 0 ou 1, que é o que a fila usa para marcar `DONE` ou `FAILED`.
 
-O `task-agent.mjs` entrega o prompt pelo **stdin** do agente, não por argumento: título e detalhe são escritos por outro agente, e stdin não tem regras de quoting nem metacaracteres para atrapalhar. Ele também aceita `TASK_AGENT_DELEGATE=1`, e aí o agente decide se divide a tarefa e enfileira filhas com `--parent` — a profundidade é imposta pela fila, não pela boa vontade do modelo.
+O `task-agent.mjs` entrega o prompt pelo **stdin** do agente, não por argumento: título e detalhe são escritos por outro agente, e stdin não tem regras de quoting nem metacaracteres para atrapalhar. Ele também aceita `TASK_AGENT_DELEGATE=1`, e aí o agente decide se divide a tarefa e enfileira filhas com `--parent`; a profundidade é imposta pela fila, não pela boa vontade do modelo.
 
 > Um CLI que **anima a saída** (spinner, redesenho de linha) não sobrevive a um pipe: o texto capturado vem com pedaços de linhas meio desenhadas. Foi por isso que a versão do Ollama usa a API HTTP em vez de `ollama run`. Se o seu agente tiver modo não-interativo ou API, prefira.
 
@@ -485,7 +485,7 @@ agent-memory scheduler --interval 30       # daemon
 agent-memory scheduler --once              # uma passada, para Task Scheduler/cron do SO
 ```
 
-Cron de 5 campos com `*`, `n`, `a-b`, `a,b,c` e passos. Quando ambos os campos de dia estão restritos, basta um casar — o comportamento padrão do cron. Vários schedulers podem rodar juntos: a varredura inteira é serializada e o `nextRunAt` é reavaliado dentro do lock, então um horário nunca dispara duas vezes.
+Cron de 5 campos com `*`, `n`, `a-b`, `a,b,c` e passos. Quando ambos os campos de dia estão restritos, basta um casar (comportamento padrão do cron). Vários schedulers podem rodar juntos: a varredura inteira é serializada e o `nextRunAt` é reavaliado dentro do lock, então um horário nunca dispara duas vezes.
 
 ### Limites contra spawn descontrolado
 
@@ -513,7 +513,7 @@ agent-memory watch --once          # uma passada e sai
 agent-memory watch --dry-run       # reporta sem gravar nada
 ```
 
-Cada arquivo alterado é atribuído ao agente que aponta para ele — pelo ponteiro atual ou, se o agente já seguiu adiante, pelo journal recente:
+Cada arquivo alterado é atribuído ao agente que aponta para ele: pelo ponteiro atual ou, se o agente já seguiu adiante, pelo journal recente:
 
 ```text
 AGENT-01               src/Auth.cs (modified +2/-0)
@@ -525,12 +525,12 @@ A atribuição é conservadora de propósito: só existe dono quando **exatament
 
 Os achados entram no journal como eventos `OBSERVED`. Duas garantias importantes:
 
-- o watcher **nunca altera o estado de um agente** — uma observação não sobrescreve o que o agente declarou estar fazendo;
+- o watcher **nunca altera o estado de um agente**: uma observação não sobrescreve o que o agente declarou estar fazendo;
 - alterações sem dono não entram no histórico de ninguém, para que o histórico individual continue sendo o registro do que aquele agente de fato declarou.
 
 O diretório `.agents/` é sempre ignorado.
 
-Em modo contínuo, as alterações já existentes na largada viram baseline e não são reportadas. Com `--once` não há baseline: tudo que estiver no working tree é avaliado, e o comando **sai com código 1 se houver alterações não declaradas** — o que serve como verificação em CI ou em hook de pre-commit.
+Em modo contínuo, as alterações já existentes na largada viram baseline e não são reportadas. Com `--once` não há baseline: tudo que estiver no working tree é avaliado, e o comando **sai com código 1 se houver alterações não declaradas**, o que serve como verificação em CI ou em hook de pre-commit.
 
 ## Dashboard local
 
@@ -549,7 +549,7 @@ O painel é atualizado por push via SSE: o servidor observa o `.agents/` e envia
 O painel mostra:
 
 - os agentes, com status efetivo (`OFFLINE` quando o heartbeat vence), demanda, ação atual e ponteiro;
-- um alerta com **todas** as sobreposições ativas do painel, e as linhas envolvidas destacadas — antes o conflito só aparecia para quem estava escrevendo naquele instante;
+- um alerta com **todas** as sobreposições ativas do painel, e as linhas envolvidas destacadas; antes o conflito só aparecia para quem estava escrevendo naquele instante;
 - o feed de atividade recente;
 - um filtro por agente, demanda, arquivo ou símbolo.
 
@@ -583,14 +583,14 @@ agent-memory mcp --root /caminho/meu-backend --agent AGENT-01
 Com isso:
 
 - o agente é registrado (ou reanexado) na largada, sem o modelo precisar chamar `memory_register`;
-- o parâmetro `agent` **some de todas as ferramentas** — `memory_record` passa a exigir só `type` e `message`;
+- o parâmetro `agent` **some de todas as ferramentas**: `memory_record` passa a exigir só `type` e `message`;
 - o id não pode ser forjado: passar `agent` de outro na chamada não redireciona a escrita.
 
-Sem isso, cada agente teria que inventar e lembrar o próprio id em toda chamada — e dois deles escolhendo `AGENT-01` compartilhariam estado sem ninguém perceber.
+Sem isso, cada agente teria que inventar e lembrar o próprio id em toda chamada, e dois deles escolhendo `AGENT-01` compartilhariam estado sem ninguém perceber.
 
 ### Configuração no cliente
 
-A maioria dos clientes MCP (Claude Code, Codex, Cursor) usa o mesmo formato. Em `.mcp.json` na raiz do projeto — **um id diferente por agente**:
+A maioria dos clientes MCP (Claude Code, Codex, Cursor) usa o mesmo formato. Em `.mcp.json` na raiz do projeto, com **um id diferente por agente**:
 
 ```json
 {
@@ -617,7 +617,7 @@ agent-memory init --name "Meu Backend"
 agent-memory serve            # painel em http://127.0.0.1:4317
 ```
 
-Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `--agent`: `AGENT-01`, `AGENT-02`, `AGENT-03`. Nada mais precisa ser coordenado — o `.agents/` é o ponto de encontro, e a detecção de sobreposição, as mensagens e o painel funcionam entre processos independentes.
+Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `--agent`: `AGENT-01`, `AGENT-02`, `AGENT-03`. Nada mais precisa ser coordenado: o `.agents/` é o ponto de encontro, e a detecção de sobreposição, as mensagens e o painel funcionam entre processos independentes.
 
 ### Ferramentas expostas
 
@@ -626,7 +626,7 @@ Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `
 | `memory_status` | Estado atual de todos os agentes. Aceita `pointer` para checar sobreposição **antes** de anunciar a intenção. |
 | `memory_read` | `SHARED_MEMORY.md` completo. |
 | `memory_read_pointer` | Lê **só o símbolo** que o ponteiro nomeia, não o arquivo inteiro. Ver [Ler pelo ponteiro](#ler-pelo-ponteiro). |
-| `memory_register` | Registra o agente. Se o id já existe, reanexa em vez de falhar — seguro em reconexões. |
+| `memory_register` | Registra o agente. Se o id já existe, reanexa em vez de falhar; seguro em reconexões. |
 | `memory_record` | Um passo do ciclo, via `type`: `INTENT`, `READING`, `FOUND`, `CHANGED`, `CREATED`, `TESTING`, `WAITING`, `NOTE`, `DONE`. Retorna as sobreposições detectadas. |
 | `memory_task_create` | Enfileira trabalho durável para outro agente. |
 | `memory_task_list` | Lista a fila. |
@@ -639,7 +639,7 @@ Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `
 
 O handshake `initialize` já devolve o protocolo (`READ -> INTENT -> CODE -> RESULT`) no campo `instructions`, então o agente recebe as regras sem precisar do `AGENT_PROTOCOL.md` no system prompt.
 
-O transporte é JSON-RPC 2.0 sobre stdio, implementado direto no projeto — sem dependências de runtime. `stdout` pertence ao protocolo; diagnósticos vão para `stderr`.
+O transporte é JSON-RPC 2.0 sobre stdio, implementado direto no projeto, sem dependências de runtime. `stdout` pertence ao protocolo; diagnósticos vão para `stderr`.
 
 ## Formato de ponteiro
 
@@ -735,7 +735,7 @@ Cada agente roda no seu próprio processo, escrevendo no mesmo `.agents/`.
 - Contenção de lock é tratada como espera, não como erro. No Windows, um arquivo em *pending-delete* ou aberto por outro leitor retorna `EPERM`/`EACCES`/`EBUSY` em vez de `EEXIST`; tratar isso como falha derruba o agente exatamente sob carga. O `rename` da escrita atômica tem a mesma proteção, e o arquivo temporário é removido se ainda assim falhar.
 - **A regeneração do painel nunca derruba a escrita que a precede.** `state/` e `events.jsonl` são gravados antes e são a fonte da verdade; o `SHARED_MEMORY.md` é derivado. Se o lock do painel estiver muito disputado, a escrita permanece durável e o próximo agente regenera a partir do disco.
 
-Medido em processos concorrentes de verdade, do zero até 40 agentes × 25 atividades (1.040 eventos): nenhum evento perdido, nenhum arquivo corrompido, nenhum histórico contaminado, nenhum lock preso, e o painel permanecendo em dia. A vazão sob 40 processos simultâneos ficou em torno de 60 escritas/s — o `refreshSharedMemory` serializa no lock global, que é o teto de escala.
+Medido em processos concorrentes de verdade, do zero até 40 agentes × 25 atividades (1.040 eventos): nenhum evento perdido, nenhum arquivo corrompido, nenhum histórico contaminado, nenhum lock preso, e o painel permanecendo em dia. A vazão sob 40 processos simultâneos ficou em torno de 60 escritas/s: o `refreshSharedMemory` serializa no lock global, que é o teto de escala.
 
 Para referência, `status` e o dashboard leem `state/` diretamente, então mostram o estado corrente mesmo que o `SHARED_MEMORY.md` esteja momentaneamente atrás.
 

@@ -237,9 +237,8 @@ test('SSE reports an overlap as soon as the second agent claims the pointer', as
 
       await service.activity({ agentId: 'AGENT-02', type: 'INTENT', description: 'também cancelamento', pointer });
 
-      // The second agent's INTENT also sends the first an overlap notice, and a poll can land
-      // between the two writes: a frame with the new unread count but the old state. The
-      // overlap is in the frame after it, so wait for it rather than for frame number two.
+      // A poll can land between the INTENT and the overlap notice, so wait a few frames for the
+      // overlap.
       let overlaps: Array<{ agents: string[]; exact: boolean }> = [];
       for (let count = 2; count <= 4 && overlaps.length === 0; count++) {
         await sse.waitFor(count);

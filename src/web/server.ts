@@ -24,8 +24,8 @@ export async function startDashboard(
   let lastSignature = '';
 
   /**
-   * Polls the store and pushes only when something actually changed, so an idle
-   * project produces no traffic and the page never re-renders for nothing.
+   * Polls the store and pushes only when something actually changed, so an idle project produces no
+   * traffic and the page never re-renders for nothing.
    */
   async function pushIfChanged(force = false): Promise<void> {
     if (clients.size === 0) return;
@@ -61,9 +61,7 @@ export async function startDashboard(
   const server = http.createServer(async (req, res) => {
     const url = (req.url ?? '/').split('?')[0];
     try {
-      // Binding to 127.0.0.1 keeps other machines out, but not a page on the open web
-      // that resolves its own hostname to 127.0.0.1 and then reads this port from the
-      // victim's browser. The Host header is what distinguishes the two.
+      // Check the Host header too: binding to 127.0.0.1 does not stop DNS rebinding.
       if (!isLocalHost(req.headers.host)) {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
         res.end('Forbidden: unexpected Host header. Open the dashboard at http://127.0.0.1.');
@@ -81,10 +79,7 @@ export async function startDashboard(
         clients.add(res);
         startPolling();
 
-        // Registered before anything that can fail. Registering it after the snapshot
-        // meant a rejected read left the response in the client set forever: the poller
-        // kept writing to a dead socket, and the outer catch tried to send a 500 on a
-        // response whose headers were already out, taking the process down with it.
+        // Registered before anything that can fail.
         req.on('close', () => {
           clients.delete(res);
           if (clients.size === 0) stopPolling();
@@ -93,9 +88,7 @@ export async function startDashboard(
         try {
           // The new client needs the current state, not just the next change.
           const snapshot = await buildSnapshot(service);
-          // Only a snapshot every client has seen may set the shared signature. A new
-          // client arriving mid-change would otherwise mark it as already delivered and
-          // the agents already connected would never receive it.
+          // Only a snapshot every client has seen may set the shared signature.
           if (clients.size === 1) lastSignature = signatureOf(snapshot);
           res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
         } catch {
@@ -110,7 +103,7 @@ export async function startDashboard(
       }
 
       if (url === '/api/status') {
-        // Kept in the original shape: documented and possibly scripted against.
+        // Legacy endpoint, same shape as before.
         const config = await service.config();
         const states = await service.states();
         json(res, {
@@ -154,9 +147,7 @@ export async function startDashboard(
     clients.clear();
   });
 
-  // An SSE response never ends on its own, and `close()` waits for every connection to
-  // finish — so a dashboard with a browser open would hang instead of shutting down, and
-  // the 'close' handler above could never run. Release the streams first, then close.
+  // Close open SSE streams, or `close()` would wait for them forever.
   const close = server.close.bind(server);
   server.close = ((callback?: (error?: Error) => void) => {
     stopPolling();
@@ -172,12 +163,7 @@ export async function startDashboard(
   return server;
 }
 
-/**
- * Accepts only the loopback names a person can actually have typed.
- *
- * A missing Host is refused too: every real browser and fetch client sends one, so its
- * absence is a hand-rolled request rather than the dashboard being used.
- */
+/** Accepts only the loopback names a person can actually have typed. */
 function isLocalHost(host: string | undefined): boolean {
   if (!host) return false;
   // Strip the port; an IPv6 literal keeps its brackets.
@@ -185,7 +171,7 @@ function isLocalHost(host: string | undefined): boolean {
   return name === '127.0.0.1' || name === 'localhost' || name === '[::1]';
 }
 
-/** Everything a viewer cares about, minus generatedAt — which changes on every build. */
+/** The snapshot without generatedAt, which changes on every build. */
 function signatureOf(snapshot: DashboardSnapshot): string {
   return JSON.stringify([snapshot.agents, snapshot.overlaps, snapshot.events]);
 }

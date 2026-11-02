@@ -1,22 +1,7 @@
 #!/usr/bin/env node
 /**
- * A local model acting as a real agent: it reads files, edits them and records its work
- * in the shared memory by calling tools, rather than emitting one blob of text.
- *
- * `task-agent-ollama.mjs` asks for a completion and writes the answer to a file. That is
- * fine for prose, but it cannot look at the code before changing it, and it never appears
- * in the panel. This one runs the tool loop against Ollama's chat API, so a local model
- * participates on the same terms as a Claude agent — just with a smaller budget of
- * competence, which is the point of routing cheap work here.
- *
- * Usage:
- *   OLLAMA_MODEL=glm-4.7-flash agent-memory run --agent L1 --exec "node examples/task-agent-local.mjs"
- *
- * Environment:
- *   OLLAMA_MODEL     model tag (default glm-4.7-flash)
- *   OLLAMA_HOST      base URL (default http://127.0.0.1:11434)
- *   LOCAL_MAX_TURNS  tool-loop ceiling (default 12) — a small model can loop forever
- *   LOCAL_WRITE      "1" to allow write_file; read-only by default
+ * A local model acting as a real agent: it reads files, edits them and records its work in the
+ * shared memory by calling tools, rather than emitting one blob of text.
  */
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -58,7 +43,7 @@ const tools = [
       name: 'read_pointer',
       description:
         'Read only the code a pointer names: "file::symbol". Returns that symbol alone, not the whole file. ' +
-        'Always try this before read_file — a small model that reads a whole file usually runs out of turns.',
+        'Always try this before read_file: a small model that reads a whole file usually runs out of turns.',
       parameters: {
         type: 'object',
         properties: {
@@ -144,8 +129,8 @@ const { AgentMemoryService } = await import(
   new URL('../dist/core/service.js', import.meta.url).href
 ).catch(() => ({ AgentMemoryService: null }));
 
-// Narrowing a file to one symbol is the whole reason a small model can answer at all here,
-// so if the build is missing, read_pointer degrades to reading the file rather than failing.
+// Narrowing to one symbol is what lets a small model answer; without the build, fall back to the
+// whole file.
 const { extractSymbol } = await import(new URL('../dist/core/extract.js', import.meta.url).href).catch(
   () => ({ extractSymbol: () => undefined })
 );
@@ -203,14 +188,7 @@ async function runTool(name, args) {
   }
 }
 
-/**
- * Finds tool calls a model wrote as text instead of emitting through the protocol.
- *
- * Smaller models routinely answer with prose plus `{"name": ..., "arguments": {...}}`
- * rather than populating `tool_calls`. The intent is unambiguous and the JSON is valid,
- * so refusing it would discard a correct decision over a formatting detail — and that
- * one detail is the difference between a local model being usable as an agent or not.
- */
+/** Finds tool calls a model wrote as text instead of emitting through the protocol. */
 function extractTextToolCalls(text, known) {
   if (!text) return [];
   const found = [];
@@ -262,7 +240,7 @@ const messages = [
     content: [
       `You are ${agent}, an agent working in a shared repository.`,
       'Use the tools. Read before you answer. Record INTENT before changing anything.',
-      'When you have the deliverable, call `answer` — that is the only way to finish.',
+      'When you have the deliverable, call `answer`: that is the only way to finish.',
       'Be brief. Do not guess file contents; read them.'
     ].join('\n')
   },
@@ -305,8 +283,7 @@ try {
     }
 
     if (calls.length === 0) {
-      // No tool call and no answer: take the plain text as the deliverable rather than
-      // looping until the ceiling, which is what a weak model tends to do here.
+      // No tool call: take the plain text as the answer instead of looping.
       if (reply?.content?.trim()) finalAnswer = reply.content.trim();
       break;
     }

@@ -1,13 +1,4 @@
-/**
- * Public API.
- *
- * The CLI and the MCP server are the two ways most people use this, but everything they
- * do goes through AgentMemoryService — so a host that already has its own process model
- * can drive the same store directly instead of shelling out.
- *
- * Deep imports (`agent-shared-memory/dist/core/...`) are not part of the contract: only
- * what is re-exported here is stable across versions.
- */
+/** Public API. */
 
 export { AgentMemoryService } from './core/service.js';
 export type {

@@ -5,7 +5,7 @@ import { formatPointer } from './pointer.js';
 
 export interface RunnerOptions {
   agentId: string;
-  /** Shell command to run per task. Task content never enters this string. */
+  /** Shell command to run per task. */
   exec: string;
   intervalMs?: number;
   /** Stop after this many tasks; 0 means run until interrupted. */
@@ -27,13 +27,7 @@ export interface RunOutcome {
 
 const OUTPUT_LIMIT = 2000;
 
-/**
- * Executes one claimed task.
- *
- * The task reaches the command through environment variables only — never by string
- * substitution. A task title is written by another agent, so interpolating it into a
- * shell command would let queued text run as code.
- */
+/** Executes one claimed task. */
 export async function executeTask(
   service: AgentMemoryService,
   task: AgentTask,
@@ -93,9 +87,7 @@ export async function executeTask(
       ? setTimeout(() => {
           timedOut = true;
           killTree(child.pid);
-          // Settle now rather than waiting for `close`: the killed shell may leave a
-          // grandchild holding the pipes open, which would block the runner for as long
-          // as the hung command wanted to live — exactly what the timeout exists to stop.
+          // Settle now instead of waiting for `close`: a grandchild may keep the pipes open.
           settle(null, 'timed out;');
         }, options.timeoutMs)
       : undefined;
@@ -105,10 +97,7 @@ export async function executeTask(
   });
 }
 
-/**
- * Claims and executes tasks until stopped. A crash between claim and finish leaves the
- * claim to expire, so the task returns to the pool instead of being lost.
- */
+/** Claims and executes tasks until stopped. */
 /** Exit code (sysexits EX_TEMPFAIL) with which an executor says it cannot work right now. */
 export const TEMPORARY_FAILURE = 75;
 
@@ -133,13 +122,10 @@ export async function runQueue(
 
     log(`claimed ${task.id}: ${task.title}`);
     const outcome = await executeTask(service, task, options);
-    // Recorded before finishing: a throw from finishTask (a lost claim, a contended
-    // lock) must not discard work that already ran and already cost money.
+    // Record the result first: finishTask can throw (lost claim, lock contention).
     outcomes.push(outcome);
 
-    // Exit 75 (EX_TEMPFAIL) means "this agent cannot work right now": out of quota, rate
-    // limited. The task goes back to the queue for someone else and this runner stops,
-    // instead of failing the task and claiming the next one only to fail it too.
+    // Exit 75 (EX_TEMPFAIL) means "this agent cannot work right now": out of quota, rate limited.
     if (outcome.exitCode === TEMPORARY_FAILURE) {
       await service.releaseTask(task.id, options.agentId, summarise(outcome)).catch(() => undefined);
       log(`released ${task.id}: the agent cannot work right now (exit ${TEMPORARY_FAILURE}); stopping`);
@@ -169,12 +155,7 @@ export async function runQueue(
   return outcomes;
 }
 
-/**
- * Kills the whole process tree, not just the shell we spawned.
- *
- * With `shell: true` the direct child is cmd.exe or sh; killing it leaves the actual
- * command running as a grandchild, so a hung task would survive its own timeout.
- */
+/** Kills the whole process tree, not just the shell we spawned. */
 function killTree(pid: number | undefined): void {
   if (!pid) return;
   try {
@@ -184,18 +165,11 @@ function killTree(pid: number | undefined): void {
       process.kill(-pid, 'SIGKILL');
     }
   } catch {
-    // Already gone, or we lost the right to signal it; nothing else to do.
+    // Already gone, or not ours to signal.
   }
 }
 
-/**
- * Substitutes `{{task_id}}` and `{{task_depth}}` only.
- *
- * Both come from a validated charset, so they cannot carry shell syntax — which is why
- * they are safe to interpolate while the title, detail and pointer are not, and stay
- * available only through the environment. This also avoids the portability trap of
- * writing `$AGENT_TASK_ID` in a command that runs under cmd.exe on Windows.
- */
+/** Substitutes `{{task_id}}` and `{{task_depth}}` only. */
 function expandCommand(exec: string, task: AgentTask): string {
   return exec.replaceAll('{{task_id}}', task.id).replaceAll('{{task_depth}}', String(task.depth));
 }

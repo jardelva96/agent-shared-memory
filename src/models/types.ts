@@ -97,10 +97,7 @@ export interface AgentTask {
   depth: number;
   parentTaskId?: string;
   scheduleId?: string;
-  /**
-   * Not claimable until every one of these reaches DONE. Accepts a bare string for tasks
-   * written before it took a list.
-   */
+  /** Not claimable until every one of these reaches DONE. */
   dependsOn?: string | string[];
   /** Set on a review task: the id of the work it judges. */
   reviewOf?: string;
@@ -108,11 +105,11 @@ export interface AgentTask {
   reviewTaskId?: string;
   /** Set on a work task: how many times a review has sent it back. */
   reviewRounds?: number;
-  /** Set on a work task: how many reviewers must judge each round. Absent means one. */
+  /** Set on a work task: how many reviewers must judge each round. */
   reviewers?: number;
   /** Set on a review task: which round of judging it belongs to, counting from 1. */
   reviewRound?: number;
-  /** 0 is the most urgent, 4 the least. Absent means 2. The queue hands out the most urgent first. */
+  /** 0 is the most urgent, 4 the least. */
   priority?: number;
   createdAt: string;
   updatedAt: string;
@@ -168,8 +165,8 @@ export interface ProjectConfig {
   recentHistoryLimit: number;
   projectName: string;
   /**
-   * Archive the journal once it passes this many events. 0 disables it, leaving the
-   * journal to grow until someone runs `compact`.
+   * Archive the journal once it passes this many events. 0 disables it, leaving the journal to grow
+   * until someone runs `compact`.
    */
   autoCompactAfterEvents: number;
   /** How long a claim is held before it returns to the pool. */
@@ -177,14 +174,13 @@ export interface ProjectConfig {
   /** Maximum spawn generations: a task created while running a task is one deeper. */
   maxTaskDepth: number;
   /**
-   * How many expired claims a task may collect before it is treated as poisonous and
-   * failed instead of returned to the queue. 0 disables the dead letter.
+   * How many expired claims a task may collect before it is treated as poisonous and failed instead
+   * of returned to the queue. 0 disables the dead letter.
    */
   maxTaskAttempts: number;
   /**
-   * How many times a review may reject the same work before it is failed for a human
-   * instead of requeued. Two agents that disagree would otherwise trade rejections
-   * forever, spending real money on every round. 0 disables the limit.
+   * How many times a review may reject the same work before it is failed for a human instead of
+   * requeued.
    */
   maxReviewRounds: number;
 }

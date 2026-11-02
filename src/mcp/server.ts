@@ -8,7 +8,7 @@ export const SERVER_NAME = 'agent-shared-memory';
 /** Keep in sync with package.json: dist/ has no package.json to read it from. */
 export const SERVER_VERSION = '1.3.0';
 
-/** Newest first. The client's version is echoed back when we support it. */
+/** Newest first. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 const INSTRUCTIONS = [
@@ -79,8 +79,7 @@ export async function startMcpServer(service: AgentMemoryService, options: McpOp
   const pinned = options.agentId;
 
   if (pinned && (isRemote(service) || (await configExists(service.root)))) {
-    // Claim the identity up front so the model never has to register itself, and so a
-    // reconnect re-attaches to the same history instead of failing on a duplicate id.
+    // Register the pinned agent up front; a reconnect re-attaches to the same history.
     try {
       if (await service.store.stateExists(pinned)) {
         await service.heartbeat(pinned);

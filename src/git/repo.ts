@@ -35,10 +35,7 @@ export async function isGitRepo(root: string): Promise<boolean> {
   }
 }
 
-/**
- * Every path that differs from HEAD, including untracked files.
- * Line counts are attached when git can produce them (absent for untracked and binary files).
- */
+/** Every path that differs from HEAD, including untracked files. */
 export async function changedFiles(root: string): Promise<GitChange[]> {
   const porcelain = await git(root, ['status', '--porcelain=v1', '-z', '-uall']);
   const numstat = await readNumstat(root);

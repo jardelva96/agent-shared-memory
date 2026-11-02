@@ -1,20 +1,9 @@
-/**
- * One memory for agents on several machines, live.
- *
- * Each machine keeps its own checkout and reads and edits its own files; what has to be
- * shared to coordinate -- who is working on what, reserved files, the task queue, messages,
- * project facts -- lives on one machine and is reached over HTTP. A reservation taken in
- * one place refuses a write in another the moment it is granted, instead of after the next
- * sync.
- *
- * The hub answers only a closed list of operations, and only to a caller with its token.
- * Administration (init, compact, config) stays on the machine that runs it.
- */
+/** HTTP hub that shares one memory between machines. */
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { AgentMemoryService } from '../core/service.js';
 
-/** What a remote agent may call. Nothing that deletes history or changes the configuration. */
+/** What a remote agent may call. */
 export const REMOTE_METHODS = new Set([
   'config',
   'states',
@@ -58,7 +47,7 @@ export interface HubOptions {
   port?: number;
   /** 127.0.0.1 by default; 0.0.0.0 to accept other machines. */
   host?: string;
-  /** Required from every caller. Generated when not given. */
+  /** Required from every caller. */
   token?: string;
 }
 

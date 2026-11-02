@@ -1,22 +1,4 @@
-/**
- * The shared memory enforced where agents actually write, instead of only where they look.
- *
- * Measured with real agents: a warning in a tool result reached the agent that arrived
- * second and not the one that wrote last, and work was erased. A notice helps only if it is
- * seen before the write. These hooks put it there without the model having to remember:
- *
- *   session-start  hands the agent the rules, facts, reservations and ready work (`prime`);
- *   pre-write      refuses a write to a file another agent reserved, or one another agent
- *                  changed since this one was told about it -- once, with the reason;
- *   post-write     records the change, which tells every other agent on the file that its
- *                  copy is stale;
- *   session-end    releases what the session held.
- *
- * And a git pre-commit hook refuses a commit that touches files reserved by someone else.
- *
- * Hooks never fail the editor because of the memory itself: a missing .agents/ or a broken
- * store lets the write through. Only a real conflict blocks.
- */
+/** Claude Code hooks and the git pre-commit guard. */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -112,8 +94,8 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
         };
       }
 
-      // A notice that another agent changed this file since: shown once, before the write
-      // it is about, then the next attempt goes through.
+      // Another agent changed this file: block this write once so the agent sees it; the retry goes
+      // through.
       const { unread } = await service.readInbox(agentId, { markRead: false });
       const stale = unread.filter(m => m.kind === 'overlap' && m.pointer?.file === rel);
       if (stale.length > 0) {
@@ -123,12 +105,12 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
           stderr: `${stale.map(m => m.body).join('\n')}\nRead ${rel} again before writing it, keep the other agent's change, then write.`
         };
       }
-      // Announce the write before it happens: whoever else is on the file hears of it now.
+      // Announce the write so other agents on this file are notified.
       await service.activity({ agentId, type: 'INTENT', description: `${payload.tool_name} ${rel}`, pointer: { file: rel } });
     }
     return { exitCode: 0 };
   } catch {
-    // The memory must never be the reason an editor cannot write.
+    // An error in the memory must not block the editor.
     return { exitCode: 0 };
   }
 }
@@ -168,10 +150,7 @@ export function selfCommand(): string {
   return /\.(c?js|mjs)$/.test(script) ? `node "${script.split(path.sep).join('/')}"` : 'agent-memory';
 }
 
-/**
- * Wires the hooks and the MCP server into a project's Claude Code settings. Idempotent: our
- * entries are recognised by their command and replaced, everything else is left alone.
- */
+/** Wires the hooks and the MCP server into a project's Claude Code settings. */
 export async function setupClaude(root: string, options: { remove?: boolean; command?: string } = {}): Promise<string[]> {
   const command = options.command ?? selfCommand();
   const done: string[] = [];

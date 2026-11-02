@@ -213,8 +213,7 @@ test('the MCP tools send and read messages end to end', async () => {
 });
 
 test('the agent already on a file is told when another one arrives', async () => {
-  // Measured with real agents: the newcomer was warned, the one already there was not, and
-  // that one wrote last from a stale read and erased the newcomer's function.
+  // Regression: the agent already on the file was not warned and overwrote the newcomer's change.
   await withProject(async (service, call) => {
     await service.register('FIRST');
     await service.register('SECOND');

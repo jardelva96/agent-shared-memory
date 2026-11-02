@@ -1,9 +1,4 @@
-/**
- * A small 5-field cron evaluator: minute hour day-of-month month day-of-week.
- *
- * Supports `*`, `n`, `a-b`, `a,b,c`, `*` with a step (`*​/n`) and `a-b/n`.
- * Day-of-week accepts 0-7 with both 0 and 7 meaning Sunday.
- */
+/** A small 5-field cron evaluator: minute hour day-of-month month day-of-week. */
 
 export interface CronExpression {
   source: string;
@@ -87,18 +82,14 @@ function dayMatches(expression: CronExpression, date: Date): boolean {
   const dom = expression.dayOfMonth.has(date.getDate());
   const dow = expression.dayOfWeek.has(date.getDay());
 
-  // Both restricted: either matching is enough. Otherwise only the restricted one counts.
+  // Both restricted: either matching is enough.
   if (expression.dayOfMonthRestricted && expression.dayOfWeekRestricted) return dom || dow;
   if (expression.dayOfMonthRestricted) return dom;
   if (expression.dayOfWeekRestricted) return dow;
   return true;
 }
 
-/**
- * The first minute strictly after `from` that the expression matches, in local time.
- * Returns undefined if nothing matches within four years (an impossible date such as
- * February 30th).
- */
+/** The first minute strictly after `from` that the expression matches, in local time. */
 export function nextOccurrence(expression: CronExpression, from: Date = new Date()): Date | undefined {
   const cursor = new Date(from.getTime());
   cursor.setSeconds(0, 0);

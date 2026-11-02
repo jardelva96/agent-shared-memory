@@ -155,8 +155,7 @@ test('a synthesis waits for every part, not just the first', async () => {
       dependsOn: parts.map(p => p.id)
     });
 
-    // Landing them one at a time must not release the synthesis early: reviewing two
-    // finished parts and one still in flight is exactly the hole this guards against.
+    // Landing the parts one at a time must not release the synthesis early.
     for (const part of parts) {
       assert.equal(await service.claimTask('QA'), undefined, `still blocked before ${part.title} landed`);
       await service.claimTask('DEV');
@@ -206,8 +205,7 @@ test('the single-value form still works for tasks written before the list', asyn
 
 test('a dependency on a task that does not exist is refused at creation', async () => {
   await withProject(async service => {
-    // Accepting the typo would queue a task that can never be claimed: nothing will ever
-    // mark T-NAOEXISTE done, so it sits OPEN forever while the listing looks healthy.
+    // A dependency on an unknown task could never be satisfied.
     await assert.rejects(
       () => service.createTask({ title: 'sintese', createdBy: 'LEAD', dependsOn: ['T-NAOEXISTE'] }),
       /does not exist/
@@ -293,7 +291,6 @@ test('a reviewer that dies without judging is not read as a rejection', async ()
     const review = (await service.claimTask('QA'))!;
 
     // The runner closes it from a non-zero exit: session limit, OOM, dropped connection.
-    // The agent recorded no verdict, so this says nothing about the code.
     await service.finishTask(review.id, 'FAILED', 'exit 1: session limit', 'QA', { fromExitCode: true });
 
     const settledWork = await service.tasks.read(work.id);
@@ -364,8 +361,7 @@ test('nobody reviews their own work, even when the review is open to anyone', as
     await service.claimTask('DEV');
     await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
 
-    // DEV just finished, so it is the first agent idle -- and the likeliest to grab the
-    // review of its own work if nothing stops it.
+    // DEV just finished, so it is the first idle agent and would otherwise take its own review.
     assert.equal(await service.claimTask('DEV'), undefined, 'the doer is not offered its own review');
     assert.equal((await service.claimTask('QA'))?.id, reviewId, 'anyone else may take it');
   });
@@ -404,8 +400,7 @@ test('a named reviewer is still honoured, and still cannot be the doer', async (
     await service.claimTask('DEV');
     await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
 
-    // Naming the doer as its own reviewer is a misconfiguration. The review stays OPEN
-    // where it can be seen: a review that never happens beats one an agent gives itself.
+    // Naming the doer as its own reviewer is a misconfiguration.
     assert.equal(await service.claimTask('DEV'), undefined);
     assert.equal((await service.tasks.read(reviewId)).status, 'OPEN');
   });
@@ -419,8 +414,7 @@ test('three reviewers decide by majority, and one dissent does not sink the work
     await service.claimTask('DEV');
     await service.finishTask(work.id, 'DONE', 'pronto', 'DEV');
 
-    // The measured failure this exists for: a reviewer that reads the right code and still
-    // returns the wrong verdict. Alone it decides; on a panel it is outvoted.
+    // A reviewer can read the right code and still return the wrong verdict.
     const dissent = (await service.claimTask('QA'))!;
     await service.finishTask(dissent.id, 'FAILED', 'discordo', 'QA');
     assert.equal((await service.tasks.read(work.id)).status, 'DONE', 'one vote is not the verdict');
@@ -454,8 +448,7 @@ test('a majority to reject sends the work back and stops the seats still working
     const round1 = (await service.tasks.list()).filter(t => t.reviewOf === work.id && (t.reviewRound ?? 1) === 1);
     assert.equal(round1.filter(t => t.status === 'CANCELLED').length, 1, 'the undecided seat was closed');
 
-    // The only thing left for a free agent is the work itself, back in the queue. No seat
-    // on a round that is already decided is ever handed out again.
+    // The only thing left for a free agent is the work itself, back in the queue.
     const next = await service.claimTask('QA3');
     assert.equal(next?.id, work.id, 'the reopened work, not a spent review');
   });
@@ -486,7 +479,7 @@ test('one agent cannot take two seats on the same panel', async () => {
 
     const first = await service.claimTask('QA');
     assert.ok(first, 'QA takes a seat');
-    // A majority of three where one agent holds two votes is a majority of one in disguise.
+    // One agent must not hold two seats on the same panel.
     assert.equal(await service.claimTask('QA'), undefined, 'and only one');
     assert.ok(await service.claimTask('QA2'), 'a different agent still can');
   });

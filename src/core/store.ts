@@ -71,11 +71,7 @@ export class MemoryStore {
     await rm(this.stateFile(agentId), { force: true });
   }
 
-  /**
-   * Opens the journal for a new session. Writes the header for a brand-new agent, and
-   * otherwise appends a session banner: an existing history is never overwritten, so an
-   * id reused after `unregister` keeps its audit trail.
-   */
+  /** Opens the journal for a new session. */
   async openHistory(state: AgentState): Promise<void> {
     const p = this.paths;
     await ensureDir(p.historyDir);
@@ -103,10 +99,7 @@ export class MemoryStore {
     }
   }
 
-  /**
-   * Moves an agent history out of the way and starts a fresh file that points at the archive.
-   * Returns the archive path, or undefined when there was nothing to rotate.
-   */
+  /** Moves an agent history out of the way and starts a fresh file that points at the archive. */
   async archiveHistory(agentId: string, stamp: string): Promise<string | undefined> {
     const p = this.paths;
     const source = this.historyFile(agentId);
@@ -128,7 +121,6 @@ export class MemoryStore {
 
   /**
    * Keeps the newest `keep` events in the journal and moves the older ones into an archive file.
-   * Returns how many events were archived and where, or undefined when nothing was trimmed.
    */
   async archiveEvents(keep: number, stamp: string): Promise<{ archived: number; file: string } | undefined> {
     const p = this.paths;
@@ -164,11 +156,7 @@ export class MemoryStore {
     }
   }
 
-  /**
-   * Appends to the global journal and, unless `history` is false, to the agent own history.
-   * Observations about an agent that did not report them go to the journal only, so a
-   * personal history stays a record of what that agent actually declared.
-   */
+  /** Appends to the global journal and, unless `history` is false, to the agent own history. */
   async appendActivity(activity: AgentActivity, options: { history?: boolean } = {}): Promise<void> {
     const p = this.paths;
     await ensureDir(p.historyDir);
@@ -189,12 +177,7 @@ export class MemoryStore {
     return tail(await this.journalLines(), limit);
   }
 
-  /**
-   * Regenerates the central panel. Callers write state and the journal first, so this is
-   * derived data: if the lock is too contended to get, the write that just happened is
-   * still durable and the next agent to refresh picks it up from disk. Failing here would
-   * throw away work that already succeeded, which is the wrong trade under concurrency.
-   */
+  /** Regenerates the central panel. */
   async refreshSharedMemory(config: ProjectConfig): Promise<number | undefined> {
     const p = this.paths;
     try {
@@ -209,8 +192,7 @@ export class MemoryStore {
           p.sharedMemoryFile,
           renderSharedMemory(states, tail(lines, config.recentHistoryLimit), config, { reservations, facts })
         );
-        // The journal was read here anyway; the size lets the caller decide to compact
-        // without paying for a second full read.
+        // Return the size so the caller can decide to compact without reading the journal again.
         return lines.length;
       });
     } catch (error) {

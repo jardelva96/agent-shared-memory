@@ -10,13 +10,7 @@ export function createSessionId(): string {
 
 const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
 
-/**
- * Agent ids are used verbatim as file names, so they are validated rather than sanitised.
- *
- * Rewriting an unsafe id into a safe one makes distinct agents alias to the same files:
- * "AGENT/01" and "AGENT-01" would share state, and unregistering one would delete the
- * other. Rejecting the id is the only way to keep an agent's data its own.
- */
+/** Agent ids are used verbatim as file names, so they are validated rather than sanitised. */
 export function assertAgentId(value: string): string {
   const id = value.trim();
   if (!id) throw new Error('Agent id must not be empty.');

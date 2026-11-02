@@ -1,8 +1,4 @@
-/**
- * Facts about the project that every session should start with: "tests need Postgres on
- * 5477", "never commit to prod directly". A journal entry scrolls away and a handoff note
- * reaches one agent; a fact is handed to every agent at the start of its session (`prime`).
- */
+/** Project facts every session starts with, e.g. "tests need Postgres". */
 import path from 'node:path';
 import { ProjectFact } from '../models/types.js';
 import { atomicWriteJson, readJson, withFileLock } from '../utils/fs.js';
@@ -47,7 +43,7 @@ export class FactStore {
     });
   }
 
-  /** Removes a fact by id (or by a unique prefix of it). Returns whether one was removed. */
+  /** Removes a fact by id (or by a unique prefix of it). */
   async forget(id: string): Promise<boolean> {
     return withFileLock(this.lock, async () => {
       const facts = await this.list();

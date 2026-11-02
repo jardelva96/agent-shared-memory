@@ -1,18 +1,4 @@
-/**
- * One way to call every free provider the benchmark uses, and one record of every call.
- *
- * Groq, OpenRouter and Gemini all speak the OpenAI chat-completions dialect, so a single
- * client covers them. What differs is how each one fails on a free tier -- Groq refuses a
- * request without a User-Agent, Gemini counts requests per model per day, OpenRouter's free
- * models disappear without notice -- and the benchmark has to survive all of it without
- * mistaking a rate limit for a wrong answer.
- *
- * Every call is appended to the log with the provider's own token counts. Nothing here
- * estimates tokens from characters: the point of the benchmark is to measure what was
- * actually billed, so a call whose usage is missing is logged as missing, not guessed.
- *
- * Keys are read from the env files named in BENCH_ENV_FILES and never written anywhere.
- */
+/** One way to call every free provider the benchmark uses, and one record of every call. */
 import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -56,7 +42,7 @@ function headers(provider) {
     'content-type': 'application/json',
     authorization: `Bearer ${KEYS[PROVIDERS[provider].key]}`,
     // Groq sits behind Cloudflare, which answers 403 "error code: 1010" to a client with no
-    // User-Agent. The others do not care either way.
+    // User-Agent.
     'user-agent': 'agent-shared-memory-bench/1.0',
     ...(provider === 'openrouter' ? { 'x-title': 'agent-shared-memory bench' } : {})
   };
@@ -74,12 +60,7 @@ export async function listModels(provider) {
 /** Calls whose response was a quota refusal, per provider/model -- reported, never retried forever. */
 export class QuotaExhausted extends Error {}
 
-/**
- * One chat completion, retried through rate limits and transient failures.
- *
- * `meta` is copied into the log line, so every call can be traced back to the experiment,
- * the run and the turn that made it.
- */
+/** One chat completion, retried through rate limits and transient failures. */
 export async function chat({ provider, model, messages, tools, temperature = 0.2, maxTokens = 4096, meta = {}, log }) {
   const body = {
     model,
@@ -89,9 +70,7 @@ export async function chat({ provider, model, messages, tools, temperature = 0.2
     ...(tools?.length ? { tools, tool_choice: 'auto' } : {})
   };
 
-  // A per-minute limit always clears if we wait, so it gets many patient attempts; the first
-  // run gave up after six while three conditions shared one free Groq minute, and recorded
-  // a rate limit as an agent that failed its task.
+  // Per-minute limits always clear, so they get many attempts.
   let malformed = 0;
   for (let attempt = 1; attempt <= 25; attempt++) {
     const started = Date.now();
@@ -174,8 +153,7 @@ export async function chat({ provider, model, messages, tools, temperature = 0.2
       await sleep(3000 * Math.min(attempt, 5));
       continue;
     }
-    // gpt-oss on Groq sometimes emits a tool call its own server cannot parse. The same
-    // request usually goes through the next time; any agent harness retries it.
+    // gpt-oss on Groq sometimes emits a tool call its own server cannot parse.
     if (response.status === 400 && /parse tool call|tool call validation/i.test(text) && malformed < 3) {
       malformed++;
       continue;

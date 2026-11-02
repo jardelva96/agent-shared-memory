@@ -1,23 +1,5 @@
 #!/usr/bin/env node
-/**
- * Executor for `agent-memory run` backed by a local Ollama model.
- *
- * This talks to the Ollama HTTP API rather than the `ollama run` CLI on purpose. That
- * command renders for a terminal — spinner frames, cursor moves, line redraws — and a
- * pipe captures all of it, so the "deliverable" ends up with fragments of half-drawn
- * lines spliced into the text. The API returns the completion and nothing else.
- *
- * The same reasoning applies to any agent CLI that animates its output: prefer its
- * non-interactive mode or its API. `examples/task-agent.mjs` is the generic version for
- * CLIs that are designed to be piped (`claude -p`, for instance).
- *
- * Usage:
- *   agent-memory run --agent WORKER --exec "node examples/task-agent-ollama.mjs"
- *
- * Environment:
- *   OLLAMA_MODEL  model tag (default llama3.1:8b)
- *   OLLAMA_HOST   base URL (default http://127.0.0.1:11434)
- */
+/** Executor for `agent-memory run` backed by a local Ollama model. */
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 

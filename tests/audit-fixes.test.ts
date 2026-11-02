@@ -72,8 +72,8 @@ test('a lock is only deleted by its owner', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'asm-own-'));
   try {
     const lockFile = path.join(root, 'x.lock');
-    // Simulate the dangerous interleaving: our work outlives the lock, someone else
-    // reclaims the path and takes it. Releasing must not evict them.
+    // Simulate the dangerous interleaving: our work outlives the lock, someone else reclaims the
+    // path and takes it.
     await withFileLock(lockFile, async () => {
       await writeFile(lockFile, 'outro-processo', 'utf8');
     });

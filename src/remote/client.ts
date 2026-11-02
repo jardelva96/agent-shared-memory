@@ -1,11 +1,4 @@
-/**
- * The memory of another machine, used as if it were local.
- *
- * Every coordination call -- `service.reserve(...)`, `service.tasks.list()` -- travels to the
- * hub; `root` stays the local checkout, so reading and editing code never leave this
- * machine. The CLI, the MCP server and the editor hooks take this object wherever they
- * would take a local service.
- */
+/** The memory of another machine, used as if it were local. */
 import { AgentMemoryService } from '../core/service.js';
 
 export interface RemoteSettings {
@@ -44,8 +37,8 @@ export function remoteService(root: string, settings: RemoteSettings): AgentMemo
     return body.value === null ? undefined : body.value;
   };
 
-  // `service.tasks.list(...)` becomes the call "tasks.list". `then` stays undefined so that
-  // awaiting the object itself does not mistake it for a promise.
+  // `service.tasks.list(...)` becomes the call "tasks.list"; `then` stays undefined so the proxy is
+  // not mistaken for a promise.
   const member = (path: string): unknown =>
     new Proxy(function remote() {}, {
       get: (_target, prop) => (typeof prop === 'string' && prop !== 'then' ? member(`${path}.${prop}`) : undefined),

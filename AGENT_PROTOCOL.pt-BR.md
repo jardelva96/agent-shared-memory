@@ -67,7 +67,7 @@ Se o comando indicar sobreposição com outro agente:
 1. leia a memória desse agente;
 2. não desfaça mudanças feitas por ele;
 3. ajuste sua implementação para coexistir quando possível;
-4. se depender dele, registre `waiting --for AGENT-X` — isso avisa o agente diretamente;
+4. se depender dele, registre `waiting --for AGENT-X`: isso avisa o agente diretamente;
 5. se a alteração ainda puder ser feita sem conflito semântico, prossiga e documente isso.
 
 ### HISTÓRICO
@@ -111,7 +111,7 @@ agent-memory send \
   --pointer "arquivo::simbolo"
 ```
 
-Não envie um aviso manual duplicando um `waiting` — a dependência já notifica sozinha.
+Não envie um aviso manual duplicando um `waiting`: a dependência já notifica sozinha.
 
 ### HEARTBEAT
 
@@ -144,7 +144,7 @@ Se o servidor MCP estiver conectado, use as ferramentas em vez dos comandos de s
 | `send` | `memory_send` |
 | `inbox` | `memory_inbox` |
 | `heartbeat` | `memory_heartbeat` |
-| — | `memory_log` (journal global de eventos) |
+| - | `memory_log` (journal global de eventos) |
 
 Duas diferenças úteis no modo MCP:
 

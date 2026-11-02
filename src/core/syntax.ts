@@ -1,14 +1,4 @@
-/**
- * Whether a source file still parses, checked before an edit is written.
- *
- * Measured with real agents: one wrote a regex without its closing slash into a file two
- * agents shared, and every test of both of them stopped loading. An edit that turns a file
- * that parsed into one that does not is refused here, with the line, and nothing is written:
- * the agent sees its mistake while it can still fix it, and nobody else inherits it.
- *
- * The real parser is used where one is at hand -- Node for JavaScript, the project's own
- * TypeScript, Python's ast -- and a bracket-and-string balance check everywhere else.
- */
+/** Whether a source file still parses, checked before an edit is written. */
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -46,7 +36,7 @@ function jsonProblem(text: string): SyntaxProblem | undefined {
   }
 }
 
-/** Node's own parser, through `node --check` on a copy. ESM when the file uses import/export. */
+/** Node's own parser, through `node --check` on a copy. */
 async function nodeProblem(text: string, ext: string): Promise<SyntaxProblem | undefined> {
   const moduleLike = ext === '.mjs' || (ext === '.js' && /^\s*(import|export)\b/m.test(text));
   const dir = await mkdtemp(path.join(os.tmpdir(), 'asm-check-'));
@@ -78,7 +68,7 @@ function loadTypeScript(root: string): TypeScriptModule | undefined {
 }
 
 function typeScriptProblem(ts: TypeScriptModule, file: string, text: string): SyntaxProblem | undefined {
-  // Syntax only: type errors belong to the build, and an edit mid-refactor has plenty.
+  // Syntax only: type errors are the build's job.
   const output = ts.transpileModule(text, { fileName: file, reportDiagnostics: true, compilerOptions: { allowJs: true, jsx: ts.JsxEmit.Preserve } });
   const first = output.diagnostics?.find(d => d.category === ts.DiagnosticCategory.Error);
   if (!first) return undefined;
@@ -86,7 +76,7 @@ function typeScriptProblem(ts: TypeScriptModule, file: string, text: string): Sy
   return { line, message: ts.flattenDiagnosticMessageText(first.messageText, ' ') };
 }
 
-/** Python's ast, through whichever interpreter answers. Null when there is none to ask. */
+/** Python's ast, through whichever interpreter answers. */
 async function pythonProblem(text: string): Promise<SyntaxProblem | undefined | null> {
   const script = 'import ast,sys\ntry:\n ast.parse(sys.stdin.read())\nexcept SyntaxError as e:\n print(e.lineno, e.msg)\n sys.exit(3)';
   // On Windows `python3` can be the Store's placeholder, which answers but parses nothing;

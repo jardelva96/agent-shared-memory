@@ -23,8 +23,8 @@ async function withProject(
 }
 
 /**
- * A killed process can still hold its working directory for a moment on Windows, so the
- * first rmdir may hit EBUSY. Retry briefly rather than failing an otherwise passing test.
+ * A killed process can still hold its working directory for a moment on Windows, so the first rmdir
+ * may hit EBUSY.
  */
 async function removeWhenFree(dir: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -186,8 +186,7 @@ test('maxTasks stops the runner after the agreed number', async () => {
 });
 
 test('exit 75 hands the task back to the queue and stops only that runner', async () => {
-  // Measured: an agent ran out of quota halfway, its correct code was already on disk, and
-  // closing the task as FAILED threw that work away.
+  // An agent out of quota may already have written correct code; failing the task would discard it.
   await withProject({}, async service => {
     const first = await service.createTask({ title: 'primeira', createdBy: 'LEAD' });
     await service.createTask({ title: 'segunda', createdBy: 'LEAD' });

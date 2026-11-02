@@ -7,24 +7,10 @@ const STALE_LOCK_MS = 30_000;
 /** A temp file older than this cannot belong to a write still in flight. */
 const STALE_TEMP_MS = 60 * 60_000;
 
-/**
- * Codes that mean "someone else is touching this right now", not "this is broken".
- *
- * POSIX reports a held lock as EEXIST. Windows also reports EPERM/EACCES/EBUSY when the
- * target is in pending-delete (another process removed it but still holds a handle) or is
- * momentarily open by a reader or a virus scanner. Treating those as fatal kills an agent
- * mid-write under concurrency, which is exactly when it matters most.
- */
+/** Codes that mean "someone else is touching this right now", not "this is broken". */
 const CONTENDED = new Set(['EEXIST', 'EPERM', 'EACCES', 'EBUSY']);
 
-/**
- * How long a reader keeps retrying a file that is momentarily gone.
- *
- * Much shorter than the contention budget on purpose: a missing file is a legitimate
- * steady state for callers like `readConfig` and `InboxStore.cursor`, so confirming an
- * absence must stay cheap. The window only has to outlast the gap between a rename and
- * the rewrite that follows it.
- */
+/** How long a reader keeps retrying a file that is momentarily gone. */
 const MISSING_RETRY_MS = 150;
 
 export class LockTimeoutError extends Error {
@@ -47,16 +33,7 @@ export async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(content) as T;
 }
 
-/**
- * The reader half of the race `renameWithRetry` handles for writers.
- *
- * Reading a file while another process renames over it fails on Windows with
- * EPERM/EBUSY, and any platform can report ENOENT when a caller moves a file aside
- * before rewriting it — `MemoryStore.archiveHistory` renames the history to the archive
- * and only then writes the new stub. Neither means the data is gone, so a raw read here
- * turns a microsecond window into a hard error: `TaskStore.list` silently drops an OPEN
- * task for a whole cycle, and `readState`/`TaskStore.read` throw outright.
- */
+/** The reader half of the race `renameWithRetry` handles for writers. */
 export async function readWithRetry(file: string, timeoutMs = 5000): Promise<string> {
   const start = Date.now();
   while (true) {
@@ -75,18 +52,13 @@ export async function readWithRetry(file: string, timeoutMs = 5000): Promise<str
 export async function atomicWrite(file: string, content: string): Promise<void> {
   const dir = path.dirname(file);
   await ensureDir(dir);
-  // The random suffix matters: two writes from one process in the same millisecond
-  // would otherwise pick the same temp path and clobber each other.
+  // Random suffix: two writes in the same millisecond must not share a temp path.
   const temp = `${file}.${process.pid}.${Date.now()}.${randomSuffix()}.tmp`;
   try {
     const handle = await open(temp, 'w');
     try {
       await handle.writeFile(content, 'utf8');
-      // Durability, not visibility. The rename is atomic for concurrent readers, but
-      // without this the directory entry can reach the disk while the bytes are still
-      // in the page cache: a crash then leaves a truncated file, every later readJson
-      // throws SyntaxError, and MemoryStore.listStates swallows it so the agent
-      // disappears from the panel permanently.
+      // Durability, not visibility.
       await handle.sync();
     } finally {
       await handle.close();
@@ -105,14 +77,8 @@ export async function atomicWriteJson(file: string, value: unknown): Promise<voi
 }
 
 /**
- * Long enough to outlast a slow-but-alive holder, and still shorter than the window that
- * declares a lock abandoned.
- *
- * At 5s every waiter gave up while a legitimate holder was still working — listing a big
- * queue, rewriting the journal, or just a slow disk — so the routine symptom of a slow
- * lock was `claim`/`finish` throwing, not the double-entry the staleness check guards
- * against. Waiting past STALE_LOCK_MS instead would mean waiting on a lock this call is
- * about to reclaim anyway.
+ * Long enough to outlast a slow-but-alive holder, and still shorter than the window that declares a
+ * lock abandoned.
  */
 const LOCK_WAIT_MS = 15_000;
 
@@ -125,9 +91,7 @@ export async function withFileLock<T>(
   await ensureDir(path.dirname(lockFile));
   let lastCode = 'EEXIST';
 
-  // Written into the lock and checked before releasing or reclaiming it. Without an
-  // identity, `rm(lockFile)` deletes whatever is at that path — including a lock a
-  // different process acquired a millisecond after ours was reclaimed as stale.
+  // Written into the lock and checked before releasing or reclaiming it.
   const nonce = `${process.pid}.${Date.now()}.${randomSuffix()}`;
 
   while (true) {
@@ -145,8 +109,7 @@ export async function withFileLock<T>(
       continue;
     }
 
-    // Acquired. Errors from here on belong to the caller and must not be retried as
-    // if they were contention.
+    // Acquired.
     try {
       return await fn();
     } finally {
@@ -167,9 +130,7 @@ async function release(
     // Already closed or the handle is gone.
   }
   try {
-    // Only delete the lock if it is still ours. A long operation can outlive
-    // STALE_LOCK_MS, get reclaimed, and another process can already hold the path;
-    // deleting it then would hand the same lock to two processes at once.
+    // Only delete the lock if it is still ours.
     if ((await readFile(lockFile, 'utf8').catch(() => nonce)) === nonce) {
       await rm(lockFile, { force: true });
     }
@@ -193,18 +154,14 @@ async function renameWithRetry(from: string, to: string, timeoutMs = 5000): Prom
   }
 }
 
-/**
- * Removes a lock left behind by a process that died mid-operation.
- * Without this a single crash wedges .agents/ until someone deletes the file by hand.
- */
+/** Removes a lock left behind by a process that died mid-operation. */
 async function reclaimIfStale(lockFile: string): Promise<boolean> {
   try {
     const info = await stat(lockFile);
     if (Date.now() - info.mtimeMs < STALE_LOCK_MS) return false;
 
-    // Re-read the identity and re-check the age after deciding it is stale: between the
-    // stat and the delete, the owner may have released it and someone else acquired the
-    // same path. Deleting by path alone would evict a lock that is very much alive.
+    // Re-read the identity and re-check the age after deciding it is stale: between the stat and
+    // the delete, the owner may have released it and someone else acquired the same path.
     const owner = await readFile(lockFile, 'utf8').catch(() => null);
     const confirm = await stat(lockFile).catch(() => null);
     if (owner === null || confirm === null) return false;
@@ -219,11 +176,8 @@ async function reclaimIfStale(lockFile: string): Promise<boolean> {
 }
 
 /**
- * Flushes the directory entry itself, so a crash right after a rename cannot leave the
- * new name missing even though its bytes were written.
- *
- * Windows does not allow opening a directory as a file, and there is no equivalent call;
- * the failure is expected there and carries no information, so it is swallowed.
+ * Flushes the directory entry itself, so a crash right after a rename cannot leave the new name
+ * missing even though its bytes were written.
  */
 async function syncDir(dir: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -237,13 +191,7 @@ async function syncDir(dir: string): Promise<void> {
   }
 }
 
-/**
- * Removes temp files left by a process killed between the write and the rename.
- *
- * Only files older than an hour are touched: anything newer could belong to a write still
- * in flight in another process, and deleting that would corrupt it. Called from compact
- * rather than from the write path, where an extra readdir per write would not pay off.
- */
+/** Removes temp files left by a process killed between the write and the rename. */
 export async function cleanStaleTemps(dir: string): Promise<number> {
   let entries: string[];
   try {

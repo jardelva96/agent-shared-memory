@@ -1,11 +1,5 @@
 #!/usr/bin/env node
-/**
- * Turns the benchmark results into the small, aggregated tables the report page reads.
- *
- * Only numbers and labels leave this machine: no answers, no code, no file contents. The
- * questions about private projects are named by what they are ("C# enum, 97 kB file"),
- * not by the project's own class names.
- */
+/** Turns the benchmark results into the small, aggregated tables the report page reads. */
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -165,8 +159,8 @@ for (const cond of ['sem_memoria', 'solo', 'revisao']) {
       tarefa: id,
       resultado: limite ? 'Não rodou (limite por minuto)' : apagado ? 'Apagada por outro agente' : t.perfeito ? 'Perfeita' : entregue ? 'Com defeito' : 'Não entregue',
       testes_ocultos: t.ocultosTotal ? share(t.ocultosPass, t.ocultosTotal) : null,
-      fez: t.quemFez.join(' + ') || '—',
-      revisou: t.quemRevisou.join(' + ') || '—',
+      fez: t.quemFez.join(' + ') || '-',
+      revisou: t.quemRevisou.join(' + ') || '-',
       rejeicoes: t.rodadasDeRevisao,
       tokens: t.tokensTrabalho + t.tokensRevisao
     });
@@ -194,8 +188,7 @@ fig('rev_aprovacoes', aprovacoes);
 fig('rev_aprovacoes_certas', aprovacoesCertas);
 fig('rev_rejeicoes', rejeicoes);
 
-// The race: two agents on one file at the same time. A trial counts as a race only when both
-// agents delivered: when one returned nothing, nobody could overwrite anybody.
+// The race: two agents on one file at the same time.
 const corridaRows = [];
 const fontes = [
   ...['sem_memoria', 'solo'].map(cond => ({ dir: path.join(loteDir, cond), cond, versao: 2 })),
@@ -343,8 +336,7 @@ write(
   Object.entries(outline).map(([linguagem, o]) => ({ linguagem, declaracoes: o.declaracoes, cobertura: o.cobertura, precisao: o.precisao }))
 );
 
-// What each tool offers, from its own public documentation. MCP Agent Mail is not in the
-// table: its license forbids Anthropic and agents acting for it from analysing or comparing it.
+// What each tool offers, from its own public documentation.
 const S = 'Sim', N = 'Não', P = 'Parcial';
 write('comparacao', [
   { recurso: 'Funciona com agentes de vários fornecedores na mesma fila', nosso: S, beads: S, serena: S, agent_teams: N },

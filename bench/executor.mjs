@@ -1,19 +1,5 @@
 #!/usr/bin/env node
-/**
- * The agent `agent-memory run` launches for one task in the multi-agent benchmark.
- *
- * Same tool loop as the token benchmark, pointed at a real queue: the task arrives through
- * the runner's environment, the agent reads and writes the sandbox, records what it is doing
- * in the shared memory (so the others see it), and a reviewer closes its review through the
- * same service the CLI uses. The provider and model come from BENCH_PROVIDER/BENCH_MODEL, so
- * four runners with four models make four different agents on one repository.
- *
- * BENCH_COND=sem_memoria removes the `record` tool: the agents work blind to each other,
- * which is the baseline the coordination is measured against.
- *
- * Exit codes: 0 work delivered (or verdict recorded), 1 nothing delivered, 3 a reviewer that
- * gave no verdict (requeued by the runner), 75 daily quota -- the orchestrator stops this agent.
- */
+/** The agent `agent-memory run` launches for one task in the multi-agent benchmark. */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
@@ -122,12 +108,8 @@ const extra = {
   }
 };
 
-// Two ways of stopping an agent from writing over a newer file, measured against each other.
-//   aviso -- the shared memory's notices reach the agent before its next write, the way a
-//            pre-write hook would surface them: unread messages are shown, and a write with
-//            unread notices pending is held once so the agent can re-read.
-//   trava -- no shared memory at all; the write is refused if the file changed since this
-//            agent last read it (what an editor tool with a stale-read check does).
+// aviso: notices reach the agent before its next write, as a pre-write hook would. trava: no shared
+// memory; a write is refused if the file changed since the agent read it.
 const memoryOn = cond !== 'sem_memoria' && cond !== 'trava';
 
 // The symbol tools, called the way the MCP server calls them.
@@ -177,8 +159,7 @@ if (cond === 'trava' || cond === 'aviso') {
     return (await readCurrent(args.file)) ?? `error: cannot read ${args.file}`;
   };
   const plainWrite = extra.write_file;
-  // A refused write hands back the file as it is now. The first race showed agents told to
-  // "read it again" retrying the write instead, until they ran out of turns.
+  // A refused write hands back the file as it is now.
   const refuse = async (why, target) => {
     const now = await readCurrent(target);
     await remember(target);
@@ -200,8 +181,8 @@ if (cond === 'trava' || cond === 'aviso') {
     const notices = await pendingNotices();
     if (notices) return refuse(notices, args.file);
     const result = await plainWrite(args);
-    // ...and the post-write hook records the change, which tells everyone else on the file
-    // that their copy is stale -- without waiting for the agent to remember to say so.
+    // ...and the post-write hook records the change, so others on the file know their copy is
+    // stale.
     await service
       .activity({ agentId: agent, type: 'CHANGED', description: `wrote ${args.file}`, task: work.id, pointer: { file: String(args.file) } })
       .catch(() => undefined);
@@ -243,8 +224,7 @@ if (isReview) {
   user = `TASK: ${work.title}\nFILE: ${file}\n\nSPECIFICATION:\n${spec}`;
   toolNames = ['read_pointer', 'read_file', 'list_files', 'write_file', 'run_tests', ...(memoryOn ? ['record'] : []), 'answer'];
   if (cond.startsWith('simbolo')) {
-    // The version that ships now: the agent changes its function by symbol and never
-    // rewrites the file, so a stale copy has nothing to overwrite.
+    // simbolo: the agent edits by symbol and never rewrites the whole file.
     system = [
       `You are ${agent}, a coding agent in a team of agents working on the same repository at the same time.`,
       'Implement the task exactly as specified, in JavaScript (ES modules).',

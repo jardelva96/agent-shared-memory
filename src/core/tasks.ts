@@ -21,10 +21,7 @@ export interface TaskFilter {
   agent?: string;
 }
 
-/**
- * The durable work queue. A message is missed if nobody reads it; a task waits until
- * someone claims and finishes it, which is what makes delegation survive a session.
- */
+/** The durable work queue. */
 export class TaskStore {
   constructor(public readonly root = process.cwd()) {}
 
@@ -68,12 +65,7 @@ export class TaskStore {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
-  /**
-   * Atomically hands the oldest eligible task to one agent.
-   *
-   * Runs under a queue-wide lock so two runners can never take the same task, and
-   * reclaims expired claims first so work abandoned by a dead runner is picked up again.
-   */
+  /** Atomically hands the oldest eligible task to one agent. */
   async claim(agentId: string, claimSeconds: number, maxAttempts = 0): Promise<AgentTask | undefined> {
     const p = this.paths;
     await ensureDir(p.tasksDir);
@@ -85,14 +77,12 @@ export class TaskStore {
       for (const task of tasks) {
         if (task.status !== 'CLAIMED' || !task.claimExpiresAt || task.claimExpiresAt > now) continue;
 
-        // A task that keeps killing its runner would otherwise return here forever, and
-        // to the *front* of the queue: its createdAt never changes, so it outranks
-        // everything queued since. Retried enough times, it is the task that is broken.
+        // Fail a task whose claim keeps expiring instead of requeueing it forever.
         if (maxAttempts > 0 && task.attempts >= maxAttempts) {
           task.status = 'FAILED';
           task.result =
             `abandonada apos ${task.attempts} tentativa(s): o claim expirou sem conclusao todas as vezes. ` +
-            'Provavel tarefa venenosa — revise antes de reenfileirar.';
+            'Provavel tarefa venenosa: revise antes de reenfileirar.';
           task.finishedAt = now;
           task.claimedBy = undefined;
           task.claimExpiresAt = undefined;
@@ -109,9 +99,7 @@ export class TaskStore {
         await this.write(task);
       }
 
-      // A blocked task stays invisible to the queue rather than being handed out early.
-      // This is what lets a plan run before the work, and a review run after it, without
-      // anyone sequencing the waves by hand.
+      // Blocked tasks are not handed out.
       const candidate = readyFor(tasks, agentId)[0];
       if (!candidate) return undefined;
 
@@ -126,26 +114,13 @@ export class TaskStore {
     });
   }
 
-  /**
-   * Closes a task. When `by` is given, only the holder of the claim may close it.
-   *
-   * A runner whose lease expired has already had the task handed to someone else; letting
-   * it write the result anyway would overwrite the new holder's work with the output of a
-   * run everyone had given up on.
-   */
+  /** Closes a task. */
   async finish(id: string, status: TaskStatus, result?: string, by?: string): Promise<FinishResult> {
     const p = this.paths;
     return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
       const task = await this.read(id);
 
-      // An agent that closed its own task through the tools has already given the verdict.
-      // The runner then calls finish again from the exit code, and a process that exits 0
-      // after recording FAILED would flip it back to DONE — which silently defeats the
-      // review gate, since a rejected review would never return the work to the queue.
-      //
-      // `closed: false` says the call changed nothing. The caller needs that to know a
-      // verdict is new: settling a review twice counts one reviewer's vote twice, and with
-      // a panel that is enough to decide a round on its own.
+      // A recorded verdict is final: a later call from the runner's exit code must not change it.
       if (TERMINAL.includes(task.status)) return { task, closed: false };
 
       if (by && task.claimedBy && task.claimedBy !== by) {
@@ -164,13 +139,7 @@ export class TaskStore {
     });
   }
 
-  /**
-   * Returns a claimed task to the pool without counting it as finished. Used for an agent
-   * that cannot work right now (out of quota, rate-limited): its task is not a failure, and
-   * closing it as one lost correct work in a measured run. The attempt still counts, so a task
-   * every agent hands back is dead-lettered like any other that keeps failing. With `by`, only
-   * that agent's claim is released.
-   */
+  /** Returns a claimed task to the pool without counting it as finished. */
   async release(id: string, by?: string, note?: string): Promise<AgentTask> {
     const p = this.paths;
     return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
@@ -244,21 +213,7 @@ export class ScheduleStore {
   }
 }
 
-/**
- * Whether handing this review to `agentId` would make the verdict worth less than nothing.
- *
- * Two ways that happens. An agent judging its own work: it matters most once reviews are
- * left open to whoever is free, because the agent that just finished is usually the first
- * one idle, so without this it is the *likeliest* reviewer. "Done" would go back to being
- * self-declared, with a review task to make it look otherwise.
- *
- * And an agent taking a second seat on the same panel: a majority of three where one agent
- * holds two of the votes is a majority of one wearing a disguise.
- *
- * A review explicitly assigned to the agent that did the work is skipped too, and stays
- * OPEN where someone can see it. A review that never happens is a visible problem; a review
- * an agent gives itself is an invisible one.
- */
+/** True when `agentId` did the work under review or already sits on the same review panel. */
 function cannotJudge(
   task: AgentTask,
   agentId: string,
@@ -279,10 +234,8 @@ function cannotJudge(
 }
 
 /**
- * The tasks `agentId` could claim right now, in the order the queue hands them out: most
- * urgent first (priority 0 before 4), then oldest. Blocked work, work assigned to someone
- * else and reviews of the agent's own work are left out. Without an agent, everything that
- * nothing blocks and nobody holds.
+ * The tasks `agentId` could claim right now, in the order the queue hands them out: most urgent
+ * first (priority 0 before 4), then oldest.
  */
 export function readyFor(tasks: AgentTask[], agentId?: string): AgentTask[] {
   const done = new Set(tasks.filter(task => task.status === 'DONE').map(task => task.id));

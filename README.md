@@ -38,7 +38,7 @@ state of the others. After a change, the agent records the result in its own app
   `task ready`, `task show` (the whole story of a task) and reviews that never go to the agent
   that did the work, decided by majority when you ask for a panel.
 
-### Measured, not claimed
+### Measured results
 
 Every number comes from `bench/` and can be run again (details in [CHANGELOG.md](CHANGELOG.md)):
 
@@ -77,7 +77,7 @@ Agent Shared Memory solves that with a small, local and auditable coordination l
 - Language: TypeScript, Node.js 20+.
 - Package: `agent-shared-memory`.
 - Binary: `agent-memory`.
-- Current version: `1.2.0`.
+- Current version: `1.3.0`.
 - Tests: `npm test`.
 - Build: `npm run build`.
 
@@ -294,7 +294,7 @@ live. The default is 5000:
 agent-memory config --auto-compact 5000   # 0 disables it
 ```
 
-This is not cosmetic. Every write regenerates the dashboard memory, and regeneration reads the live
+Compaction also keeps writes fast. Every write regenerates the dashboard memory, and regeneration reads the live
 journal. Without compaction, write latency grew from 6.8 ms at 2,000 events to 12.7 ms at 40,000 and
 kept rising. With compaction enabled, it stays around 6 ms because the live journal stabilizes.
 
@@ -354,7 +354,7 @@ WARNING: 1 active overlap(s) detected:
 - AGENT-01 [WORKING] EXACT src/Orders/OrderService.cs -> OrderService.CancelAsync(Guid orderId)
 ```
 
-The goal is shared awareness, not authoritarian locking. To see every active overlap in the project,
+The goal is shared awareness, not a hard lock. To see every active overlap in the project,
 use the dashboard or `GET /api/snapshot`.
 
 ## Work Queue, Runner And Scheduling

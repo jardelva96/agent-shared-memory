@@ -123,8 +123,7 @@ test('replacing a symbol changes only its lines and keeps the indentation', asyn
 });
 
 test('two agents editing two functions of one file at the same time both keep their work', async () => {
-  // The race measured with real agents: each rewrote the whole file from its own earlier
-  // read, and the second write erased the first. By symbol, the file is re-read under a lock.
+  // Two agents rewriting the whole file from an old read: the second write erases the first.
   await withProject({ 'src/texto.js': TEXTO }, async root => {
     await Promise.all([
       editSymbol(root, 'src/texto.js::quebrarLinhas', 'export function quebrarLinhas(texto, largura) {\n  return [texto];\n}'),
@@ -154,7 +153,7 @@ test('an edit refuses a pointer outside the project or a symbol that is not ther
 });
 
 test('an edit that breaks the syntax is refused with the line, and nothing is written', async () => {
-  // The mistake a real agent made in a shared file: a regex without its closing slash.
+  // A regex without its closing slash.
   const broken = 'export function contarPalavras(texto) {\n  const re = /\p{L}+gu;\n  return 0;\n}';
   await withProject(
     {

@@ -19,9 +19,7 @@ export function detectConflicts(
   if (!pointer) return [];
   const conflicts: Conflict[] = [];
   for (const state of states) {
-    // Staleness is honoured when a config is supplied, so an agent that stopped sending
-    // heartbeats is not reported as an active clash here while the panel already shows it
-    // as OFFLINE. Without the config the raw status is used, which is the old behaviour.
+    // With a config, agents past staleAfterSeconds are ignored, matching OFFLINE on the panel.
     const status = config ? effectiveStatus(state, config) : state.status;
     if (state.id === requesterId || !ACTIVE_STATUSES.has(status) || !state.current?.pointer) continue;
     const relation = pointersOverlap(pointer, state.current.pointer);
@@ -38,13 +36,7 @@ export function detectConflicts(
   return conflicts;
 }
 
-/**
- * Every pair of live agents currently pointing at the same file or symbol.
- *
- * Unlike detectConflicts, which answers "who clashes with this one write", this is the
- * whole-panel view. Staleness is honoured: an agent that stopped sending heartbeats is
- * not reported as an active clash.
- */
+/** Every pair of live agents currently pointing at the same file or symbol. */
 export function detectOverlapPairs(states: AgentState[], config: ProjectConfig): OverlapPair[] {
   const active = states
     .filter(state => state.current?.pointer && ACTIVE_STATUSES.has(effectiveStatus(state, config)))

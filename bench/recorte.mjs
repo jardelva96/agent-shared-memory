@@ -1,21 +1,5 @@
 #!/usr/bin/env node
-/**
- * Test 0 -- does a pointer bring back the right code? No model involved.
- *
- * For every declaration the language's own compiler finds (TypeScript, Python's ast,
- * Roslyn for C#), extractSymbol is asked for it by name and its slice is compared with the
- * compiler's span:
- *   exato    -- the right declaration, ending on the right line;
- *   cortado  -- the right declaration, ending too early (the agent misses part of it);
- *   passou   -- the right declaration, running into what follows;
- *   errado   -- a different piece of code (the worst case: confident and wrong);
- *   nao_achou-- nothing returned (the agent falls back to reading the file).
- * Names declared more than once in a file are counted apart: a pointer by bare name cannot
- * tell them apart, and charging that to the extractor would blur what is being measured.
- *
- * Usage: node --import tsx bench/recorte.mjs <old-extract.ts> <files.txt>
- *   files.txt lists one source path per line.
- */
+/** Test 0 -- does a pointer bring back the right code? */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';

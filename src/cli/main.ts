@@ -229,9 +229,7 @@ async function main(): Promise<void> {
           reviewers: numberFlag(parsed.flags, 'reviewers'),
           priority: numberFlag(parsed.flags, 'priority')
         });
-        // Building a chain from a script means capturing the id of each part to pass to
-        // --depends-on. `claim` and `list` already answer in JSON; create silently ignored
-        // the flag, so the only way through was parsing the sentence below.
+        // Lets a script capture the id to pass to --depends-on.
         if (parsed.flags.json) {
           console.log(JSON.stringify(task, null, 2));
           break;
@@ -352,10 +350,8 @@ async function main(): Promise<void> {
       const config = await service.config();
       const lease = config.taskClaimSeconds;
       const explicitTimeout = numberFlag(parsed.flags, 'timeout');
-      // The claim lease starts when the task is claimed; the timeout starts after the
-      // process spawns. Giving them the same length means a task that reaches its
-      // timeout has always already lost its claim, so its result is refused and the
-      // work is thrown away. Finish comfortably inside the lease instead.
+      // The claim lease starts when the task is claimed; the timeout starts after the process
+      // spawns.
       const timeout = explicitTimeout ?? Math.max(1, Math.floor(lease * 0.8));
       if (explicitTimeout !== undefined && explicitTimeout >= lease) {
         console.warn(

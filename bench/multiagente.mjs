@@ -1,20 +1,7 @@
 #!/usr/bin/env node
 /**
- * Tests 2 and 3 -- several agents from different providers on one repository, through the
- * real queue (`agent-memory run`), with the result graded by tests the agents never see.
- *
- * Each condition gets its own fresh copy of the sandbox and its own queue:
- *   sem_memoria -- agents cannot record or see each other (no `record` tool), no review;
- *   solo        -- agents announce INTENT/CHANGED and see conflicts, no review;
- *   revisao     -- as solo, and every task needs an open review by a different agent.
- * The conditions run at the same time, so a provider slowing down or a quota running out
- * hits all of them alike.
- *
- * Afterwards: hidden tests per task (quality), the runs log (tokens per task and per
- * review), and an audit of the queue's promises -- one claim at a time, no agent reviewing
- * its own work, a dependent task never starting before its dependency is done.
- *
- * Usage: BENCH_ENV_FILES=... node bench/multiagente.mjs [--conds sem_memoria,solo,revisao] [--minutes 60]
+ * Tests 2 and 3 -- several agents from different providers on one repository, through the real
+ * queue (`agent-memory run`), with the result graded by tests the agents never see.
  */
 import { readFile, readdir, writeFile, mkdir, cp, appendFile } from 'node:fs/promises';
 import { existsSync, createWriteStream } from 'node:fs';

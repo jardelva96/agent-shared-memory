@@ -1,7 +1,4 @@
-/**
- * The dashboard shell. It ships no data: the page opens an SSE connection and renders
- * every value through textContent, so agent-supplied text can never become markup.
- */
+/** The dashboard shell. */
 export function renderDashboardPage(projectName: string): string {
   return `<!doctype html>
 <html lang="en">
@@ -342,7 +339,7 @@ code{color:var(--link);font-size:12px;word-break:break-word}
     render();
   });
 
-  // Keeps the relative timestamps honest between pushes.
+  // Refresh the relative timestamps between pushes.
   setInterval(render, 1000);
 })();
 </script>

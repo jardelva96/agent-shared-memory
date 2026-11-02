@@ -1,20 +1,5 @@
 #!/usr/bin/env node
-/**
- * Test 1 -- does reading by pointer really save tokens, and does it cost correctness?
- *
- * Every question is asked twice per model, identically except for the tools:
- *   arquivo  -- read_file only: the agent reads whole files, as most agents do today;
- *   ponteiro -- read_pointer as well: the agent can ask for one symbol.
- * Both are told the same file and the same symbol, so the only difference is the tool.
- *
- * Token counts are the providers' own. Answers are graded against the facts in the code by
- * the patterns in the question files; every answer is kept so a person can check the grader.
- *
- * Re-running resumes: a run already in runs.jsonl is skipped, so a model whose daily quota
- * ran out can be finished the next day without repeating the others.
- *
- * Usage: BENCH_ENV_FILES="a/.env;b/.env" node bench/economia.mjs [--reps 2] [--only groq]
- */
+/** Test 1 -- does reading by pointer really save tokens, and does it cost correctness? */
 import { readFile, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

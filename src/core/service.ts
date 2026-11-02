@@ -61,9 +61,8 @@ export interface InboxResult {
 
 export interface FinishOptions {
   /**
-   * Set by the runner: this verdict comes from the process exit code, not from the agent
-   * calling memory_task_finish. Only meaningful when the agent recorded nothing itself,
-   * since a verdict already given is never overwritten.
+   * Set by the runner: this verdict comes from the process exit code, not from the agent calling
+   * memory_task_finish.
    */
   fromExitCode?: boolean;
 }
@@ -72,7 +71,7 @@ export interface CreateTaskInput {
   title: string;
   createdBy: string;
   detail?: string;
-  /** 0 (most urgent) to 4. Absent means 2. A review inherits its work's priority. */
+  /** 0 (most urgent) to 4. */
   priority?: number;
   pointer?: CodePointer;
   assignedTo?: string;
@@ -84,19 +83,11 @@ export interface CreateTaskInput {
   /** Queue a linked review task for this agent, unblocked when the work lands. */
   reviewBy?: string;
   /**
-   * Queue the review without naming a reviewer: whoever is free takes it, except the agent
-   * that did the work. Removes the single point of failure of a named reviewer that is busy
-   * or dead, at the cost of not choosing who judges.
+   * Queue the review without naming a reviewer: whoever is free takes it, except the agent that did
+   * the work.
    */
   reviewOpen?: boolean;
-  /**
-   * How many agents must judge the work. Defaults to one.
-   *
-   * More than one exists because a single reviewer is not reliable: a model that reads the
-   * right code can still return the wrong verdict, and one wrong verdict is the whole
-   * decision. A majority absorbs that. It costs a review per agent, so it is worth it for
-   * work where being wrong is expensive, not as a default.
-   */
+  /** How many agents must judge the work. */
   reviewers?: number;
   /** Marks this task as the review of another. */
   reviewOf?: string;
@@ -188,10 +179,7 @@ export class AgentMemoryService {
     return state;
   }
 
-  /**
-   * Starts a fresh session for an agent that already exists, keeping its history.
-   * This is the recovery path for an agent whose process restarted.
-   */
+  /** Starts a fresh session for an agent that already exists, keeping its history. */
   async reset(agentId: string, role?: string, task?: string): Promise<AgentState> {
     const previous = await this.requireAgent(agentId);
     const now = nowIso();
@@ -217,7 +205,7 @@ export class AgentMemoryService {
     return state;
   }
 
-  /** Removes an agent from the shared panel. Its history file is kept as the audit trail. */
+  /** Removes an agent from the shared panel. */
   async unregister(agentId: string): Promise<AgentState> {
     const state = await this.requireAgent(agentId);
     await this.store.appendActivity(
@@ -229,16 +217,13 @@ export class AgentMemoryService {
       })
     );
     await this.store.deleteState(agentId);
-    // An agent that leaves holds nothing: its reservations would otherwise block until they expire.
+    // Release the agent's reservations so they do not block others until they expire.
     await this.reservations.release(agentId).catch(() => 0);
     await this.afterWrite();
     return state;
   }
 
-  /**
-   * Reserves files, folders or globs for this agent. All of them or none: when any is held
-   * against it, nothing is granted and the conflicts say by whom and until when.
-   */
+  /** Reserves files, folders or globs for this agent. */
   async reserve(agentId: string, patterns: string[], options: ReserveOptions = {}): Promise<ReserveResult> {
     await this.requireAgent(agentId);
     const result = await this.reservations.reserve(agentId, patterns, options);
@@ -259,7 +244,7 @@ export class AgentMemoryService {
     return result;
   }
 
-  /** Releases this agent's reservations on these patterns, or all of them. Returns how many. */
+  /** Releases this agent's reservations on these patterns, or all of them. */
   async release(agentId: string, patterns?: string[]): Promise<number> {
     const released = await this.reservations.release(agentId, patterns);
     if (released > 0 && (await this.store.stateExists(agentId))) {
@@ -283,7 +268,6 @@ export class AgentMemoryService {
     return removed;
   }
 
-  /** What `agentId` could claim right now, most urgent first; without an agent, all unblocked work. */
   /** Returns a claimed task to the queue unfinished, for another agent. */
   async releaseTask(id: string, agentId: string, note?: string): Promise<AgentTask> {
     const task = await this.tasks.release(id, agentId, note);
@@ -297,14 +281,14 @@ export class AgentMemoryService {
     return task;
   }
 
+  /** What `agentId` could claim right now, most urgent first; without an agent, all unblocked work. */
   async readyTasks(agentId?: string): Promise<AgentTask[]> {
     return readyFor(await this.tasks.list(), agentId);
   }
 
   /**
-   * Everything that happened to one task: the task itself, the reviews that judged it and
-   * every journal entry that names it, oldest first. What "who did this and why was it
-   * rejected" needs, in one call.
+   * Everything that happened to one task: the task itself, the reviews that judged it and every
+   * journal entry that names it, oldest first.
    */
   async taskHistory(id: string): Promise<{ task: AgentTask; reviews: AgentTask[]; events: AgentActivity[] }> {
     const task = await this.tasks.read(id);
@@ -318,9 +302,8 @@ export class AgentMemoryService {
   }
 
   /**
-   * What an agent needs at the start of a session, in one short text: the rules, the facts,
-   * who is doing what, which files are taken, what work is ready and what is waiting for it.
-   * Written for the SessionStart hook, which also runs again after the context is compacted.
+   * What an agent needs at the start of a session, in one short text: the rules, the facts, who is
+   * doing what, which files are taken, what work is ready and what is waiting for it.
    */
   async prime(agentId?: string): Promise<string> {
     const config = await this.config();
@@ -451,17 +434,10 @@ export class AgentMemoryService {
     return { activity, state: next, conflicts };
   }
 
-  /**
-   * An overlap used to reach only the agent that announced second. The one already on the
-   * file never heard of it -- and in a measured run that was the agent that wrote last, from
-   * a read taken before the newcomer's change, and erased it. Whoever is already there is
-   * told as well, through the inbox their tools already surface.
-   */
+  /** Tells every agent already on the same file or symbol, not only the newcomer. */
   private async notifyOverlap(input: ActivityInput, previous: AgentState, conflicts: Conflict[]): Promise<void> {
     if (!input.pointer || conflicts.length === 0) return;
-    // A write is what makes everyone else's copy stale, so every write is announced. An
-    // announcement is not: once per arrival on a file is enough -- and the measured run
-    // showed that arrival alone was not, because both agents arrived before either wrote.
+    // A write is what makes everyone else's copy stale, so every write is announced.
     const wrote = input.type === 'CHANGED' || input.type === 'CREATED';
     if (!wrote && previous.current?.pointer?.file === input.pointer.file) return;
 
@@ -481,10 +457,7 @@ export class AgentMemoryService {
     }
   }
 
-  /**
-   * Declaring a dependency should reach the agent being depended on. Without this the
-   * wait is only visible to whoever happens to read the panel.
-   */
+  /** Notifies the agent being waited for. */
   private async notifyDependency(input: ActivityInput, previous: AgentState): Promise<void> {
     if (input.type !== 'WAITING' || !input.waitingFor) return;
     if (input.waitingFor === input.agentId) return;
@@ -509,10 +482,7 @@ export class AgentMemoryService {
     });
   }
 
-  /**
-   * Queues work for whoever can take it. Depth is inherited from the task being executed,
-   * so a chain of agents spawning agents stops at maxTaskDepth instead of running away.
-   */
+  /** Queues work for whoever can take it. */
   async createTask(input: CreateTaskInput): Promise<AgentTask> {
     const config = await this.config();
     let depth = 0;
@@ -532,9 +502,7 @@ export class AgentMemoryService {
       throw new Error(`Cannot assign to an unregistered agent: ${input.assignedTo}`);
     }
 
-    // A dependency on a task that does not exist can never become DONE, so the task would
-    // sit OPEN and unclaimable forever while looking perfectly healthy in the listing.
-    // Cheaper to refuse the typo here than to debug a queue that silently stopped moving.
+    // Reject dependencies on unknown tasks: they would never become DONE.
     const dependencies = input.dependsOn
       ? Array.isArray(input.dependsOn)
         ? input.dependsOn
@@ -574,9 +542,7 @@ export class AgentMemoryService {
     await this.tasks.write(task);
 
     if (wantsReview) {
-      // A panel of one is the ordinary case and stays a single task. More than one is only
-      // meaningful when nobody is named: asking the same agent to judge three times is
-      // three times the cost for exactly one opinion.
+      // A panel of one is the ordinary case and stays a single task.
       const seats = panel || 1;
       task.reviewers = seats;
       const reviews = await this.queueReviewPanel(task, 1, input.createdBy, input.reviewBy, seats);
@@ -628,14 +594,7 @@ export class AgentMemoryService {
     return task;
   }
 
-  /**
-   * Closes a task and settles anything waiting on it.
-   *
-   * A review that rejects sends the work back to the queue with the reason attached,
-   * which is the point of separating who does the work from who checks it: "done" stops
-   * being self-declared. A review whose work failed has nothing left to judge, so it is
-   * cancelled rather than left blocking the queue forever.
-   */
+  /** Closes a task and settles anything waiting on it. */
   async finishTask(
     id: string,
     status: TaskStatus,
@@ -645,15 +604,11 @@ export class AgentMemoryService {
   ): Promise<AgentTask> {
     const { task, closed } = await this.tasks.finish(id, status, result, by);
 
-    // Nothing changed, so there is no new verdict to settle and no new result to announce.
-    // The runner calls this after the agent already closed the task through the tools, and
-    // settling twice counts one reviewer's vote twice.
+    // Already closed: settling again would count the same vote twice.
     if (!closed) return task;
 
     if (task.reviewOf) {
-      // A reviewer that died never judged anything. Because tasks.finish ignores a verdict
-      // already recorded by the agent, a status arriving here from an exit code proves the
-      // agent closed nothing itself -- so this is "could not review", not "rejected".
+      // A failure from the exit code means the reviewer gave no verdict, so the review is retried.
       if (status !== 'DONE' && options.fromExitCode) {
         await this.retryAbandonedReview(task, result);
       } else {
@@ -671,7 +626,7 @@ export class AgentMemoryService {
       this.makeActivity({
         agentId: actor,
         type: 'TASK',
-        description: `${status.toLowerCase()} ${task.id}: ${task.title}${result ? ` — ${result}` : ''}`,
+        description: `${status.toLowerCase()} ${task.id}: ${task.title}${result ? ` - ${result}` : ''}`,
         pointer: task.pointer
       }),
       { history: await this.store.stateExists(actor) }
@@ -682,7 +637,7 @@ export class AgentMemoryService {
       await this.deliver({
         from: actor,
         to: task.createdBy,
-        body: `Task ${task.id} ${status.toLowerCase()}: ${task.title}${result ? ` — ${result}` : ''}`,
+        body: `Task ${task.id} ${status.toLowerCase()}: ${task.title}${result ? ` - ${result}` : ''}`,
         pointer: task.pointer,
         kind: 'task'
       });
@@ -692,23 +647,16 @@ export class AgentMemoryService {
     return task;
   }
 
-  /**
-   * Puts a review back in the queue when its agent died before judging.
-   *
-   * Counting a crash as a rejection is expensive twice over: correct work is bounced back
-   * to a doer who has nothing to fix, and a round is burned off the rejection limit. A
-   * session limit, a dropped connection or an OOM says nothing about the code.
-   */
+  /** Puts a review back in the queue when its agent died before judging. */
   private async retryAbandonedReview(review: AgentTask, result?: string): Promise<void> {
     const { maxTaskAttempts } = await this.config();
     const now = nowIso();
 
-    // A reviewer that dies every time it runs would otherwise requeue forever. The same
-    // attempt budget that dead-letters a poisonous task applies here.
+    // A reviewer that dies every time it runs would otherwise requeue forever.
     if (maxTaskAttempts > 0 && review.attempts >= maxTaskAttempts) {
       review.result =
         `revisao abandonada apos ${review.attempts} tentativa(s): o agente terminou sem dar veredito. ` +
-        `Ultima saida: ${result ?? 'sem detalhe'}. O trabalho continua sem revisao — precisa de decisao humana.`;
+        `Ultima saida: ${result ?? 'sem detalhe'}. O trabalho continua sem revisao: precisa de decisao humana.`;
       review.updatedAt = now;
       await this.tasks.write(review);
       return;
@@ -734,12 +682,7 @@ export class AgentMemoryService {
     );
   }
 
-  /**
-   * Queues the reviews for one round of judging on `work`.
-   *
-   * Every review of a round carries the same `reviewRound`, which is what lets a verdict be
-   * counted against its own panel instead of against every review the work ever collected.
-   */
+  /** Queues the reviews for one round of judging on `work`. */
   private async queueReviewPanel(
     work: AgentTask,
     round: number,
@@ -781,13 +724,7 @@ export class AgentMemoryService {
     return reviews;
   }
 
-  /**
-   * Cancels the seats that have not voted once the outcome can no longer change.
-   *
-   * A reviewer still working on a decided round costs a real model call for an opinion that
-   * cannot move anything, so the panel closes as soon as the majority exists rather than
-   * waiting for unanimity.
-   */
+  /** Cancels the seats that have not voted once the outcome can no longer change. */
   private async closeUndecided(panel: AgentTask[], why: string): Promise<void> {
     for (const seat of panel) {
       if (seat.status === 'OPEN' || seat.status === 'CLAIMED') {
@@ -812,21 +749,18 @@ export class AgentMemoryService {
       return; // The work was removed; nothing to settle.
     }
 
-    // One verdict is not the verdict when a panel is judging. Votes are counted within
-    // this review's own round, so a rejection from round 1 never counts against round 2.
+    // With a panel, votes are counted within this review's own round.
     const round = review.reviewRound ?? 1;
     const panel = await this.reviewPanel(work.id, round);
     const seats = Math.max(panel.length, work.reviewers ?? 1);
     const approvals = panel.filter(seat => seat.status === 'DONE').length;
     const rejections = panel.filter(seat => seat.status === 'FAILED').length;
     const majority = Math.floor(seats / 2) + 1;
-    // An even panel can split. Nobody reaches a majority, so the work would wait forever;
-    // a split is treated as "not approved", because approving needs agreement and doubt is
-    // not agreement.
+    // An even panel can split; a split counts as not approved.
     const allIn = approvals + rejections >= seats;
 
     if (approvals >= majority) {
-      // Decided. The seats still waiting have nothing left to add and would only cost money.
+      // Decided: cancel the seats that have not voted yet.
       await this.closeUndecided(panel, `maioria ja aprovou ${work.id} (${approvals}/${seats})`);
       await this.store.appendActivity(
         this.makeActivity({
@@ -851,15 +785,12 @@ export class AgentMemoryService {
     }
     await this.closeUndecided(panel, `maioria ja rejeitou ${work.id} (${rejections}/${seats})`);
 
-    // Rejected: the work goes back to the queue carrying the reason, so whoever picks it
-    // up next starts from the objection instead of repeating the same mistake.
+    // Rejected: requeue the work with the reviewer's reason.
     const rounds = (work.reviewRounds ?? 0) + 1;
     const { maxReviewRounds } = await this.config();
     const now = nowIso();
 
-    // A doer that cannot satisfy its reviewer would otherwise trade rejections with it
-    // until someone notices the bill. Past the limit the work stops rather than looping,
-    // and a person decides whether the code or the objection is the thing that is wrong.
+    // Cap the rejections so a doer and a reviewer cannot loop forever.
     if (maxReviewRounds > 0 && rounds >= maxReviewRounds) {
       work.status = 'FAILED';
       work.reviewRounds = rounds;
@@ -896,16 +827,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     work.updatedAt = now;
     await this.tasks.write(work);
 
-    // The review that just rejected is spent, and nothing else would ever queue another:
-    // the redone work would close with no one looking at it, so the gate would open
-    // permanently after exactly one rejection -- the opposite of the point.
-    //
-    // A fresh review rather than reopening this one. Reopening would put it back to OPEN
-    // while its own runner is still exiting, and the exit code would then overwrite the
-    // rejection the agent just recorded -- turning a reject into an approval. Leaving each
-    // round closed also keeps the objections readable one by one.
-    // An open review stays open for the next round. Falling back to whoever happened to
-    // claim it would quietly pin every later round to the first agent that showed up.
+    // Queue a new review round for the redone work.
     const next = await this.queueReviewPanel(
       work,
       rounds + 1,
@@ -949,10 +871,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     return schedule;
   }
 
-  /**
-   * Materialises every schedule whose time has come. Safe to run from several processes:
-   * the whole sweep is serialised, and nextRunAt is re-read inside the lock.
-   */
+  /** Materialises every schedule whose time has come. */
   async runDueSchedules(now: Date = new Date()): Promise<AgentTask[]> {
     const created: AgentTask[] = [];
     const lock = path.join(this.store.paths.locksDir, 'schedules.lock');
@@ -985,9 +904,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
           })
         );
       } catch (error) {
-        // nextRunAt has already advanced, so this occurrence cannot be retried — and one
-        // schedule failing must not swallow the others in the same sweep. Record the miss
-        // where it will be seen instead of losing it silently.
+        // One failing schedule must not stop the others in this sweep.
         await this.store
           .appendActivity(
             this.makeActivity({
@@ -1006,17 +923,14 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     return created;
   }
 
-  /** Sends a message to another agent inbox. The recipient must be registered. */
+  /** Sends a message to another agent inbox. */
   async sendMessage(input: SendMessageInput): Promise<AgentMessage> {
     const message = await this.deliver(input);
     await this.afterWrite();
     return message;
   }
 
-  /**
-   * Reads an agent inbox. By default this acknowledges everything returned, so the next
-   * read only surfaces what arrived since. Pass `markRead: false` to peek.
-   */
+  /** Reads an agent inbox. */
   async readInbox(agentId: string, options: { markRead?: boolean } = {}): Promise<InboxResult> {
     await this.requireAgent(agentId);
     const [messages, unread] = await Promise.all([
@@ -1044,9 +958,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     };
     await this.messages.append(message);
 
-    // Mirrored into the journal so the panel and the feed show that contact happened. A notice
-    // the system sends on an agent's behalf stays out of that agent's own history: it is not
-    // something the agent did.
+    // Mirrored into the journal so the panel and the feed show that contact happened.
     await this.store.appendActivity(
       this.makeActivity({
         agentId: input.from,
@@ -1060,9 +972,8 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
   }
 
   /**
-   * Records something observed about an agent rather than declared by it — a change found
-   * in the working tree, for example. Agent state is never touched: an observer must not
-   * overwrite what an agent said it was doing.
+   * Records something observed about an agent rather than declared by it, such as a change in the
+   * working tree.
    */
   async observe(input: {
     agentId: string;
@@ -1084,12 +995,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     return activity;
   }
 
-  /**
-   * Regenerates the panel and, if the journal has outgrown its limit, archives the old
-   * events. The size comes from the refresh, which already read the journal, so the check
-   * costs nothing. Every writer runs it, but archiveEvents is idempotent under its lock:
-   * whoever gets there first trims, the rest find nothing left to do.
-   */
+  /** Regenerates the panel and, if the journal has outgrown its limit, archives the old events. */
   private async afterWrite(config?: ProjectConfig): Promise<void> {
     const effective = config ?? (await this.config());
     const journalSize = await this.store.refreshSharedMemory(effective);
@@ -1100,7 +1006,7 @@ REVISAO ANTERIOR REJEITOU: ${result ?? 'sem motivo'}`.trim();
     try {
       await this.store.archiveEvents(keep, nowIso().replace(/[:.]/g, '-'));
     } catch (error) {
-      // Another agent is already trimming; the write itself is long since durable.
+      // Another agent is already compacting; the write itself already succeeded.
       if (!isLockTimeout(error)) throw error;
     }
   }

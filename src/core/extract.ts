@@ -1,37 +1,22 @@
-/**
- * Pulls the text of one symbol out of a source file.
- *
- * A pointer names `file::symbol`, but until now nothing acted on the symbol half: an agent
- * given a pointer still read the whole file. That is affordable for a large model and fatal
- * for a small one -- a 7B asked to enumerate something from a 400-line file ran out of turns,
- * and answered the same question from a 41-line slice in one.
- *
- * This is a heuristic, not a parser. It is deliberately language-agnostic: brace-balanced
- * for the C family, indentation-based for Python, and it gives up rather than guessing when
- * it cannot find the symbol -- the caller falls back to reading the file.
- */
+/** Pulls the text of one symbol out of a source file. */
 
 export interface ExtractedSymbol {
   text: string;
-  /** 1-based, inclusive. Includes the doc comment above the declaration. */
+  /** 1-based, inclusive. */
   startLine: number;
   /** 1-based: the line that names the symbol, after its doc comment and attributes. */
   declarationLine: number;
   endLine: number;
 }
 
-/** Words that appear before a name in a declaration, across the languages people use here. */
+/** Words that can come before a declared name. */
 const DECLARATORS = [
   'function', 'class', 'interface', 'type', 'const', 'let', 'var', 'enum', 'struct', 'trait',
   'impl', 'def', 'fn', 'func', 'public', 'private', 'protected', 'internal', 'static', 'async',
   'export', 'abstract', 'readonly', 'override', 'record', 'delegate', 'fun', 'val'
 ];
 
-/**
- * The declarators that say what kind of thing comes next. Directly before a name they mean
- * this line declares it. A modifier does not: in C# and Java the word after `public` is
- * usually the type (`public EscolaStatus Status`), not the name being declared.
- */
+/** The declarators that say what kind of thing comes next. */
 const KIND_WORDS = new Set([
   'function', 'class', 'interface', 'type', 'const', 'let', 'var', 'enum', 'struct', 'trait',
   'impl', 'def', 'fn', 'func', 'record', 'delegate', 'fun', 'val'
@@ -43,12 +28,7 @@ const USE_WORDS = new Set([
   'in', 'of', 'is', 'as', 'case', 'else', 'extends', 'implements', 'not', 'and', 'or', 'import', 'using'
 ]);
 
-/**
- * Reduces `OrderService.CancelAsync(Guid id)` to `CancelAsync`.
- *
- * The qualifier is dropped because a method is written both ways depending on who is
- * pointing at it, and the file only contains one of the two spellings.
- */
+/** Reduces `OrderService.CancelAsync(Guid id)` to `CancelAsync`. */
 function bareName(symbol: string): string {
   const withoutArgs = symbol.split('(')[0];
   const segments = withoutArgs.split(/[.#:]/).filter(Boolean);
@@ -57,9 +37,7 @@ function bareName(symbol: string): string {
 
 /** How strongly a line looks like the *declaration* of `name`, rather than a use of it. */
 function declarationScore(line: string, name: string): number {
-  // Strings and comments are blanked first: `@Get('overview') overview()` names the method
-  // twice, and the first mention, inside the quotes, is not code. Decorators in front of the
-  // declaration go too (`@IsString() @MaxLength(220) title!: string;`).
+  // Blank strings and comments first: in `@Get('overview') overview()` the quoted name is not code.
   const code = maskLiterals(line).replace(/^\s*(?:@[\w.]+(?:\([^()]*\))?\s*)+/, m => ' '.repeat(m.length));
   const at = indexOfWord(code, name);
   if (at < 0) return 0;
@@ -71,27 +49,23 @@ function declarationScore(line: string, name: string): number {
   let score = 1;
 
   if (DECLARATORS.some(word => indexOfWord(before, word) >= 0)) score += 4;
-  // `name(` is a call as often as a definition, but a call rarely opens a block on the
-  // same line and rarely sits at the start of its line.
+  // `name(` may be a call; a definition usually starts the line or opens a block.
   if (/^\s*[(<]/.test(after)) score += 1;
   if (/[{:=]\s*$/.test(code) || /\)\s*(:[^=]*)?\s*\{\s*$/.test(code)) score += 2;
   if (tail === '') score += 1;
   // Right after `interface`, `def`, `enum`... the name is being declared; further along the
   // same line it is only a parameter or a return type.
   if (wordBefore && KIND_WORDS.has(wordBefore)) score += 3;
-  // In expression position the name is being used: an argument, the value of an assignment,
-  // a type annotation, a member access, `return name`. A type word before it is not on the
-  // list -- `bool Name(` and `string? Name` are how C# and Java declare, and penalising any
-  // word there handed `private bool MexeNoAcervo()` to `var acervo = MexeNoAcervo();`.
+  // In expression position the name is being used: an argument, the value of an assignment, a type
+  // annotation, a member access, `return name`.
   if (/(=|=>|->|\(|,|:|<|\||&|!|\[|\.|\{)$/.test(tail) || (wordBefore && USE_WORDS.has(wordBefore))) score -= 3;
   if (/^\s*(return|await|throw)\b/.test(code)) score -= 2;
   return score;
 }
 
 /**
- * The line with the inside of every string and comment replaced by spaces, so positions
- * still match the original. A line that starts inside a block comment (` * ...`) is all
- * comment.
+ * The line with the inside of every string and comment replaced by spaces, so positions still match
+ * the original.
  */
 export function maskLiterals(line: string): string {
   if (/^\s*(\/\*|\*(\s|\/|$))/.test(line)) return ' '.repeat(line.length);
@@ -135,13 +109,7 @@ function isHashComment(line: string, i: number): boolean {
   return line[i] === '#' && (line.slice(0, i).trim() === '' || /\s/.test(line[i + 1] ?? ' '));
 }
 
-/**
- * Where a regular-expression literal that starts at `i` ends, or -1 when the `/` is division.
- *
- * `/[{:=]\s*$/` holds a brace, and counting it as code left the block open to the end of
- * the file. A `/` begins a regex where a value is expected: after an operator, an opening
- * bracket, a comma, or at the start of the line.
- */
+/** Where a regular-expression literal that starts at `i` ends, or -1 when the `/` is division. */
 export function regexEnd(line: string, i: number): number {
   const previous = line.slice(0, i).trimEnd();
   if (!(previous === '' || /[(,=:[!&|?{};+\-*%<>~^]$/.test(previous) || /\b(return|typeof|case)$/.test(previous))) {
@@ -174,9 +142,8 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * Where a source text's brackets stop balancing: the 1-based line where more close than
- * opened, or the end when some never close. Undefined when they balance. Strings, comments
- * and regex literals are skipped, the same way the slicer reads them.
+ * Where a source text's brackets stop balancing: the 1-based line where more close than opened, or
+ * the end when some never close.
  */
 export function unbalancedAt(source: string): { line: number; message: string } | undefined {
   const state: { inBlockComment: boolean; sawBrace?: boolean; openQuote?: string } = { inBlockComment: false };
@@ -191,16 +158,10 @@ export function unbalancedAt(source: string): { line: number; message: string } 
   return undefined;
 }
 
-/**
- * Walks a line counting braces, ignoring the ones inside strings and comments.
- *
- * `state.inBlockComment` carries across lines; a brace inside `/* ... *\/` or a string
- * would otherwise end the block early and hand back a truncated symbol.
- */
+/** Walks a line counting braces, ignoring the ones inside strings and comments. */
 function countBraces(line: string, state: { inBlockComment: boolean; sawBrace?: boolean; openQuote?: string }): number {
   let depth = 0;
-  // A template literal or a raw string can span lines, and the braces in a help text written
-  // inside one are not code. Any other string ends with its line.
+  // Template literals and raw strings can span lines; braces inside them are not code.
   let quote: string | undefined = state.openQuote;
   for (let i = 0; i < line.length; i++) {
     const char = line[i];
@@ -311,38 +272,26 @@ function stripInline(line: string): string {
 
 const MAX_LINES = 400;
 
-/**
- * Returns the text of `symbol` within `source`, or undefined when it cannot be located.
- *
- * Undefined is a real answer: a caller that cannot find the symbol should read the file
- * rather than be handed a confident slice of the wrong thing.
- */
+/** Returns the text of `symbol` within `source`, or undefined when it cannot be located. */
 export function extractSymbol(source: string, symbol: string): ExtractedSymbol | undefined {
   const lines = source.split('\n');
   const best = findDeclaration(lines, symbol);
   return best === undefined ? undefined : sliceAt(lines, best);
 }
 
-/**
- * The 0-based line that declares `symbol`, or undefined. Exported for the tools that need
- * the line itself -- an edit that replaces a symbol, a search across files -- rather than
- * the text around it.
- */
+/** The 0-based line that declares `symbol`, or undefined. */
 export function findDeclaration(lines: string[], symbol: string): number | undefined {
   const name = bareName(symbol);
   if (!name) return undefined;
 
-  // `OrderService.CancelAsync` is looked for inside OrderService first. A member's bare name
-  // is often also a local somewhere else in the file (`status`, `config`), and a local
-  // declaration outscores a property; the qualifier is what the pointer means.
+  // `OrderService.CancelAsync` is looked for inside OrderService first.
   const segments = symbol.split('(')[0].split(/[.#]|::/).map(s => s.trim()).filter(Boolean);
   if (segments.length > 1) {
     const container = findDeclaration(lines, segments.slice(0, -1).join('.'));
     if (container !== undefined) {
-      // The whole type, however long: a member past line 400 of a class is still its member.
+      // Search the whole type, not only the first MAX_LINES.
       const range = sliceAt(lines, container, Infinity);
-      // Members sit at one indentation; a local of the same name inside a method sits deeper,
-      // and `const config = {` outscores `async config() {` on its own.
+      // Prefer member indentation: a local with the same name sits deeper.
       const firstMember = lines.slice(container + 1, range.endLine).find(line => line.trim() !== '' && !/^\s*[{}]\s*$/.test(line));
       const inside = bestDeclaration(lines, name, container + 1, range.endLine, firstMember === undefined ? undefined : indentOf(firstMember));
       if (inside !== undefined) return inside;
@@ -358,8 +307,7 @@ function bestDeclaration(lines: string[], name: string, from: number, to: number
   for (let i = from; i < to; i++) {
     let score = declarationScore(lines[i], name);
     if (score > 1 && memberIndent !== undefined && indentOf(lines[i]) === memberIndent) score += 4;
-    // On a tie the shallower line wins: `const config = await this.config();` inside a method
-    // scores like the `config()` method it calls, and a pointer means the member, not a local.
+    // On a tie, prefer the shallower line (a member over a local).
     if (score > bestScore || (score === bestScore && best >= 0 && indentOf(lines[i]) < indentOf(lines[best]))) {
       bestScore = score;
       best = i;
@@ -383,22 +331,15 @@ export function sliceAt(lines: string[], best: number, maxLines = MAX_LINES): Ex
     /:\s*$/.test(declaration.replace(/#.*$/, '').trimEnd());
 
   if (!pythonHeader) {
-    // Brace-balanced, from the declaration line on. The body does not have to open on that
-    // line: C# and Java put `{` on the next one, and a long signature spans several. So the
-    // walk ends when a block that opened has closed, or -- before any block opened -- when a
-    // statement ends (`const x = 1;`). Stopping at the first balanced line instead handed back
-    // a bare signature, or an enum with only its first member.
+    // Brace-balanced, from the declaration line on.
     let depth = 0;
     let opened = false;
     for (let i = best; i < lines.length && i - best < maxLines; i++) {
       // A signature with no body, followed by a gap: whatever comes next is not part of it.
-      // Without semicolons (`type A = B` then `type C = D`) a statement also ends where the
-      // next declaration begins.
       const inString = Boolean(state.openQuote);
       if (i > best && !opened && depth <= 0 && !inString && (lines[i].trim() === '' || startsDeclaration(lines[i], indent))) break;
-      // With no terminator at all (Python's `RAIZ = Path(...)` followed by `CONFIG = ...`), a
-      // finished statement is followed by a line at its own indentation. Not when the line
-      // before visibly continues, and not for a body brace on its own line (C#, Java).
+      // No terminator (e.g. a Python constant): the statement ends at the next line with the same
+      // indentation.
       if (
         i > best && !opened && depth <= 0 && !inString &&
         indentOf(lines[i]) <= indent &&
