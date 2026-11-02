@@ -20,7 +20,8 @@ const BOOLEAN_FLAGS = new Set([
   'review',
   'help',
   'shared',
-  'remove'
+  'remove',
+  'apply'
 ]);
 
 /**
@@ -34,6 +35,9 @@ const KNOWN_FLAGS = new Set([
   ...BOOLEAN_FLAGS,
   'root',
   'priority',
+  'remote',
+  'token',
+  'host',
   'ttl',
   'reason',
   'path',

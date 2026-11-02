@@ -184,3 +184,29 @@ test('maxTasks stops the runner after the agreed number', async () => {
     assert.equal((await service.tasks.list({ status: ['OPEN'] })).length, 3);
   });
 });
+
+test('exit 75 hands the task back to the queue and stops only that runner', async () => {
+  // Measured: an agent ran out of quota halfway, its correct code was already on disk, and
+  // closing the task as FAILED threw that work away.
+  await withProject({}, async service => {
+    const first = await service.createTask({ title: 'primeira', createdBy: 'LEAD' });
+    await service.createTask({ title: 'segunda', createdBy: 'LEAD' });
+
+    const outcomes = await runQueue(service, {
+      agentId: 'WORKER',
+      exec: `${NODE} -e "console.log('cota do dia acabou'); process.exit(75)"`
+    });
+    assert.equal(outcomes.length, 1, 'it stopped instead of claiming the next task to fail it too');
+
+    const back = await service.tasks.read(first.id);
+    assert.equal(back.status, 'OPEN');
+    assert.equal(back.claimedBy, undefined);
+    assert.match(back.result ?? '', /cota do dia acabou/);
+
+    // Another agent picks it up and finishes it.
+    await service.register('OTHER');
+    const done = await runQueue(service, { agentId: 'OTHER', exec: `${NODE} -e "process.exit(0)"` });
+    assert.deepEqual(done.map(o => o.status), ['DONE', 'DONE']);
+    assert.equal((await service.tasks.read(first.id)).status, 'DONE');
+  });
+});

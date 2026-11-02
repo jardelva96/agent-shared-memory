@@ -98,6 +98,12 @@ code{color:var(--link);font-size:12px;word-break:break-word}
 <h2>Work queue</h2>
 <ul class="feed" id="queue"><li class="empty">Waiting for data...</li></ul>
 
+<h2>Reserved files</h2>
+<ul class="feed" id="reservations"><li class="empty">Waiting for data...</li></ul>
+
+<h2>Project facts</h2>
+<ul class="feed" id="facts"><li class="empty">Waiting for data...</li></ul>
+
 <h2>Recent activity</h2>
 <ul class="feed" id="feed"><li class="empty">Waiting for data...</li></ul>
 </main>
@@ -246,6 +252,42 @@ code{color:var(--link);font-size:12px;word-break:break-word}
     });
   }
 
+  function renderReservations() {
+    var host = document.getElementById('reservations');
+    host.textContent = '';
+    if (!snapshot) return;
+    var held = (snapshot.reservations || []).filter(function (r) {
+      return matches([r.pattern, r.agentId, r.reason]);
+    });
+    if (held.length === 0) {
+      host.appendChild(el('li', 'empty', 'No files reserved.'));
+      return;
+    }
+    held.forEach(function (r) {
+      var item = el('li');
+      item.appendChild(el('code', null, r.pattern));
+      item.appendChild(el('span', 'who', r.agentId));
+      item.appendChild(el('span', 'tag', r.exclusive ? 'exclusive' : 'shared'));
+      item.appendChild(el('span', 'muted', 'until ' + clock(r.expiresAt)));
+      if (r.reason) item.appendChild(el('span', null, r.reason));
+      host.appendChild(item);
+    });
+  }
+
+  function renderFacts() {
+    var host = document.getElementById('facts');
+    host.textContent = '';
+    if (!snapshot) return;
+    var facts = snapshot.facts || [];
+    if (facts.length === 0) {
+      host.appendChild(el('li', 'empty', 'No project facts yet.'));
+      return;
+    }
+    facts.forEach(function (f) {
+      host.appendChild(el('li', null, f.text));
+    });
+  }
+
   function renderFeed() {
     var feed = document.getElementById('feed');
     feed.textContent = '';
@@ -281,6 +323,8 @@ code{color:var(--link);font-size:12px;word-break:break-word}
     renderBanner();
     renderAgents();
     renderQueue();
+    renderReservations();
+    renderFacts();
     renderFeed();
   }
 

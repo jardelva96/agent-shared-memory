@@ -164,16 +164,24 @@ export class TaskStore {
     });
   }
 
-  /** Returns a claimed task to the pool without counting it as finished. */
-  async release(id: string): Promise<AgentTask> {
+  /**
+   * Returns a claimed task to the pool without counting it as finished. Used for an agent
+   * that cannot work right now (out of quota, rate-limited): its task is not a failure, and
+   * closing it as one lost correct work in a measured run. The attempt still counts, so a task
+   * every agent hands back is dead-lettered like any other that keeps failing. With `by`, only
+   * that agent's claim is released.
+   */
+  async release(id: string, by?: string, note?: string): Promise<AgentTask> {
     const p = this.paths;
     return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
       const task = await this.read(id);
+      if (task.status !== 'CLAIMED' || (by && task.claimedBy && task.claimedBy !== by)) return task;
       const now = nowIso();
       task.status = 'OPEN';
       task.claimedBy = undefined;
       task.claimedAt = undefined;
       task.claimExpiresAt = undefined;
+      if (note !== undefined) task.result = note;
       task.updatedAt = now;
       await this.write(task);
       return task;

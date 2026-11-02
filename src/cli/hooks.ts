@@ -23,6 +23,15 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { AgentMemoryService } from '../core/service.js';
 import { localTime } from '../utils/time.js';
+import { remoteFromEnv, remoteService } from '../remote/client.js';
+
+function gitTopLevel(cwd: string): string | undefined {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface HookOutcome {
   exitCode: number;
@@ -58,11 +67,14 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
   } catch {
     return { exitCode: 0 };
   }
-  const root = findRoot(payload.cwd ?? process.cwd());
+  // With a hub, this checkout needs no .agents/ of its own: the memory lives on the hub.
+  const remote = remoteFromEnv(env);
+  const cwd = payload.cwd ?? process.cwd();
+  const root = findRoot(cwd) ?? (remote ? gitTopLevel(cwd) ?? cwd : undefined);
   if (!root) return { exitCode: 0 };
 
   try {
-    const service = new AgentMemoryService(root);
+    const service = remote ? remoteService(root, remote) : new AgentMemoryService(root);
     const agentId = sessionAgent(env, payload.session_id);
     if (!(await service.store.stateExists(agentId))) await service.register(agentId, 'Claude Code').catch(() => undefined);
 
@@ -123,14 +135,15 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
 
 /** Refuses a commit that touches a file another agent holds exclusively. */
 export async function runGitPreCommit(root: string, env: NodeJS.ProcessEnv = process.env): Promise<HookOutcome> {
-  if (!findRoot(root)) return { exitCode: 0 };
+  const remote = remoteFromEnv(env);
+  if (!remote && !findRoot(root)) return { exitCode: 0 };
   let staged: string[];
   try {
     staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' }).split('\n').map(s => s.trim()).filter(Boolean);
   } catch {
     return { exitCode: 0 };
   }
-  const service = new AgentMemoryService(root);
+  const service = remote ? remoteService(root, remote) : new AgentMemoryService(root);
   const me = env.AGENT_MEMORY_AGENT?.trim();
   const problems: string[] = [];
   for (const file of staged) {

@@ -22,18 +22,25 @@ export type {
   SendMessageInput
 } from './core/service.js';
 
-export { ScheduleStore, TaskStore, dependenciesOf } from './core/tasks.js';
+export { ScheduleStore, TaskStore, dependenciesOf, readyFor } from './core/tasks.js';
 export type { TaskFilter } from './core/tasks.js';
 
 export { formatPointer, parsePointer, pointerKey, pointersOverlap } from './core/pointer.js';
 export { detectConflicts, detectOverlapPairs } from './core/conflicts.js';
-export { extractSymbol } from './core/extract.js';
+export { extractSymbol, findDeclaration, sliceAt } from './core/extract.js';
+export { codeFiles, editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from './core/symbols.js';
+export type { EditMode, EditResult, OutlineEntry, ReferenceMatch, RenamePlan, SymbolMatch } from './core/symbols.js';
+export { syntaxProblem } from './core/syntax.js';
+export type { SyntaxProblem } from './core/syntax.js';
+export { ReservationStore, globToRegExp, normalizePattern, patternCovers, patternsOverlap } from './core/reservations.js';
+export type { ReservationConflict, ReserveOptions, ReserveResult } from './core/reservations.js';
+export { FactStore } from './core/facts.js';
 export type { ExtractedSymbol } from './core/extract.js';
 export type { OverlapPair } from './core/conflicts.js';
 
 export { DEFAULT_CONFIG, configExists, readConfig, writeConfig } from './core/config.js';
 
-export { executeTask, runQueue } from './core/runner.js';
+export { TEMPORARY_FAILURE, executeTask, runQueue } from './core/runner.js';
 export type { RunOutcome, RunnerOptions } from './core/runner.js';
 
 export {
@@ -46,6 +53,13 @@ export {
 export type { McpOptions } from './mcp/server.js';
 
 export { startDashboard } from './web/server.js';
+
+export { REMOTE_METHODS, newToken, startHub } from './remote/hub.js';
+export type { Hub, HubOptions } from './remote/hub.js';
+export { isRemote, remoteFromEnv, remoteService } from './remote/client.js';
+export type { RemoteSettings } from './remote/client.js';
+export { findRoot, runClaudeHook, runGitPreCommit, setupClaude, setupGit } from './cli/hooks.js';
+export type { HookOutcome } from './cli/hooks.js';
 export type { DashboardOptions } from './web/server.js';
 
 export { DEFAULT_WATCHER_ID, assertGitRepo, currentChanges, runWatchPass } from './git/watcher.js';
@@ -60,7 +74,9 @@ export type {
   ActivityType,
   CodePointer,
   Conflict,
+  FileReservation,
   ProjectConfig,
+  ProjectFact,
   TaskSchedule,
   TaskStatus
 } from './models/types.js';

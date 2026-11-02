@@ -204,3 +204,21 @@ test('over MCP, an edit by symbol respects a reservation and tells the others wh
     assert.match(outline.content[0].text, /1-3 function a/);
   });
 });
+
+test('a task shows its whole story: claim, rejection, the redo and the verdicts', async () => {
+  await withProject(async service => {
+    const work = await service.createTask({ title: 'formatar moeda', createdBy: 'A', reviewOpen: true });
+    await service.claimTask('A');
+    await service.finishTask(work.id, 'DONE', 'feito', 'A');
+    const review = await service.claimTask('B');
+    await service.finishTask(review!.id, 'FAILED', 'esqueceu o negativo', 'B');
+
+    const { task, reviews, events } = await service.taskHistory(work.id);
+    assert.equal(task.reviewRounds, 1);
+    assert.equal(reviews.length, 2, 'the rejecting review and the next round');
+    assert.match(reviews[0].result!, /esqueceu o negativo/);
+    const said = events.map(e => e.description).join('\n');
+    assert.match(said, /claimed .*formatar moeda/);
+    assert.match(said, /revisao rejeitou|rejected/i);
+  });
+});

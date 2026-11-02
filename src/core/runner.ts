@@ -109,6 +109,9 @@ export async function executeTask(
  * Claims and executes tasks until stopped. A crash between claim and finish leaves the
  * claim to expire, so the task returns to the pool instead of being lost.
  */
+/** Exit code (sysexits EX_TEMPFAIL) with which an executor says it cannot work right now. */
+export const TEMPORARY_FAILURE = 75;
+
 export async function runQueue(
   service: AgentMemoryService,
   options: RunnerOptions,
@@ -133,6 +136,15 @@ export async function runQueue(
     // Recorded before finishing: a throw from finishTask (a lost claim, a contended
     // lock) must not discard work that already ran and already cost money.
     outcomes.push(outcome);
+
+    // Exit 75 (EX_TEMPFAIL) means "this agent cannot work right now": out of quota, rate
+    // limited. The task goes back to the queue for someone else and this runner stops,
+    // instead of failing the task and claiming the next one only to fail it too.
+    if (outcome.exitCode === TEMPORARY_FAILURE) {
+      await service.releaseTask(task.id, options.agentId, summarise(outcome)).catch(() => undefined);
+      log(`released ${task.id}: the agent cannot work right now (exit ${TEMPORARY_FAILURE}); stopping`);
+      return outcomes;
+    }
 
     try {
       await service.finishTask(task.id, outcome.status, summarise(outcome), options.agentId, {

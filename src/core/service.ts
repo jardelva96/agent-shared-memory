@@ -284,8 +284,37 @@ export class AgentMemoryService {
   }
 
   /** What `agentId` could claim right now, most urgent first; without an agent, all unblocked work. */
+  /** Returns a claimed task to the queue unfinished, for another agent. */
+  async releaseTask(id: string, agentId: string, note?: string): Promise<AgentTask> {
+    const task = await this.tasks.release(id, agentId, note);
+    if (task.status === 'OPEN') {
+      await this.store.appendActivity(
+        this.makeActivity({ agentId, type: 'TASK', description: `released ${id} back to the queue${note ? `: ${note}` : ''}`, pointer: task.pointer }),
+        { history: await this.store.stateExists(agentId) }
+      );
+      await this.afterWrite();
+    }
+    return task;
+  }
+
   async readyTasks(agentId?: string): Promise<AgentTask[]> {
     return readyFor(await this.tasks.list(), agentId);
+  }
+
+  /**
+   * Everything that happened to one task: the task itself, the reviews that judged it and
+   * every journal entry that names it, oldest first. What "who did this and why was it
+   * rejected" needs, in one call.
+   */
+  async taskHistory(id: string): Promise<{ task: AgentTask; reviews: AgentTask[]; events: AgentActivity[] }> {
+    const task = await this.tasks.read(id);
+    const all = await this.tasks.list();
+    const reviews = all.filter(t => t.reviewOf === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const ids = new Set([id, ...reviews.map(r => r.id)]);
+    const events = (await this.store.recentActivities(100_000))
+      .filter(event => [...ids].some(taskId => event.description.includes(taskId) || event.task === taskId))
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    return { task, reviews, events };
   }
 
   /**

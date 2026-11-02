@@ -1,7 +1,7 @@
 {
   "name": "agent-shared-memory",
-  "version": "1.2.0",
-  "description": "Local-first shared memory and task coordination for multiple AI coding agents, with CLI, MCP server, Git watcher, review gates and live dashboard.",
+  "version": "1.3.0",
+  "description": "Shared memory and coordination for AI coding agents from any vendor: file reservations enforced by editor hooks, safe edits by symbol, a review-gated task queue, and a live multi-machine hub.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +20,11 @@
     "src",
     "examples",
     "README.md",
-    "LICENSE"
+    "README.pt-BR.md",
+    "CHANGELOG.md",
+    "AGENT_PROTOCOL.md",
+    "LICENSE",
+    "AGENT_PROTOCOL.pt-BR.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -41,7 +45,12 @@
     "model-context-protocol",
     "claude-code",
     "git-watcher",
-    "dashboard"
+    "dashboard",
+    "file-reservations",
+    "code-navigation",
+    "symbol-editing",
+    "claude-code-hooks",
+    "multi-machine"
   ],
   "license": "MIT",
   "engines": {

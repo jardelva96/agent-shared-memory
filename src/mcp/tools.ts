@@ -7,7 +7,8 @@ import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
 import { dependenciesOf } from '../core/tasks.js';
-import { editSymbol, findReferences, findSymbol, outlineSymbols } from '../core/symbols.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../core/symbols.js';
+import { isRemote } from '../remote/client.js';
 import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
 import { INVALID_PARAMS, RpcError } from './jsonrpc.js';
 
@@ -409,6 +410,31 @@ export const TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'memory_rename',
+    description:
+      'Rename a symbol everywhere it is used. Without apply it only shows every line that would change; read that, then call ' +
+      'again with apply=true. Refused when the name is declared more than once in the project, since its uses cannot be told apart.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Your agent id.' },
+        symbol: { type: 'string', description: 'The current name, e.g. "calcTotal" or "Order.calcTotal".' },
+        new_name: { type: 'string', description: 'The new name.' },
+        apply: { type: 'boolean', description: 'Write the change. Leave out to see the plan first.' }
+      },
+      required: ['agent', 'symbol', 'new_name']
+    }
+  },
+  {
+    name: 'memory_task_show',
+    description: 'Everything about one task: its details, who claimed it, every review and verdict, and each journal entry that names it.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Task id, e.g. T-ABC123.' } },
+      required: ['id']
+    }
+  },
+  {
     name: 'memory_remember',
     description:
       'Store a fact about the project that every agent should start with ("tests need Postgres on 5477"). Keep it short and ' +
@@ -440,7 +466,7 @@ export async function callTool(
   args: Record<string, unknown>,
   pinnedAgent?: string
 ): Promise<string> {
-  if (!(await configExists(service.root))) {
+  if (!isRemote(service) && !(await configExists(service.root))) {
     throw new Error(
       `No .agents/ found in ${service.root}. Run "agent-memory init" in the project root, or start the server with --root PATH.`
     );
@@ -627,6 +653,41 @@ export async function callTool(
     case 'memory_remember': {
       const fact = await service.remember(requiredString(args, 'fact'), agentId());
       return `Remembered (${fact.id}). Every session now starts with it.`;
+    }
+    case 'memory_rename': {
+      const agent = agentId();
+      const plan = await renameSymbol(service.root, requiredString(args, 'symbol'), requiredString(args, 'new_name'));
+      if (plan.refused) return `Not renamed: ${plan.refused}`;
+      const files = [...new Set(plan.changes.map(c => c.file))];
+      for (const file of files) {
+        const held = (await service.reservations.holders(file, agent)).filter(r => r.exclusive);
+        if (held.length) return `Not renamed: ${file} is reserved by ${held[0].agentId} until ${held[0].expiresAt}.`;
+      }
+      const listing = plan.changes.slice(0, 60).map(c => `${c.file}:${c.line}  ${c.after}`).join('\n');
+      if (args.apply !== true) {
+        return `Plan: ${plan.changes.length} line(s) in ${files.length} file(s) would change. Call again with apply=true to write it.\n${listing}`;
+      }
+      const done = await renameSymbol(service.root, requiredString(args, 'symbol'), requiredString(args, 'new_name'), { apply: true });
+      if (await service.store.stateExists(agent)) {
+        for (const file of files) {
+          await service.activity({ agentId: agent, type: 'CHANGED', description: `renamed ${done.from} to ${done.to}`, pointer: { file } });
+        }
+      }
+      return `Renamed ${done.from} to ${done.to}: ${done.changes.length} line(s) in ${files.length} file(s).\n${listing}`;
+    }
+    case 'memory_task_show': {
+      const { task, reviews, events } = await service.taskHistory(requiredString(args, 'id'));
+      return [
+        `${task.id} ${task.status} [P${task.priority ?? 2}] ${task.title}`,
+        task.detail ? `Detail: ${task.detail}` : '',
+        `Created by ${task.createdBy}${task.claimedBy ? `, claimed by ${task.claimedBy}` : ''}; attempts ${task.attempts}${task.reviewRounds ? `, rejected ${task.reviewRounds}x` : ''}`,
+        task.result ? `Result: ${task.result}` : '',
+        ...reviews.map(r => `Review ${r.id} (round ${r.reviewRound ?? 1}): ${r.status}${r.claimedBy ? ` by ${r.claimedBy}` : ''}${r.result ? `: ${r.result}` : ''}`),
+        '',
+        ...events.map(e => `${e.timestamp} ${e.agentId} ${e.type} ${e.description}`)
+      ]
+        .filter((line, i) => line !== '' || i > 3)
+        .join('\n');
     }
     case 'memory_prime':
       return service.prime(pinnedAgent ?? optionalString(args, 'agent'));

@@ -47,14 +47,19 @@ export interface DashboardSnapshot {
   overlaps: OverlapPair[];
   events: SnapshotEvent[];
   tasks: SnapshotTask[];
+  /** Files held right now, so a person sees what each agent has claimed. */
+  reservations: Array<{ pattern: string; agentId: string; exclusive: boolean; expiresAt: string; reason?: string }>;
+  facts: Array<{ id: string; text: string }>;
 }
 
 export async function buildSnapshot(service: AgentMemoryService, eventLimit = 40): Promise<DashboardSnapshot> {
   const config = await service.config();
-  const [states, activities, queue] = await Promise.all([
+  const [states, activities, queue, reservations, facts] = await Promise.all([
     service.states(),
     service.store.recentActivities(eventLimit),
-    service.tasks.list({ status: ['OPEN', 'CLAIMED'] })
+    service.tasks.list({ status: ['OPEN', 'CLAIMED'] }),
+    service.reservations.active(),
+    service.facts.list()
   ]);
 
   const overlaps = detectOverlapPairs(states, config);
@@ -92,6 +97,8 @@ export async function buildSnapshot(service: AgentMemoryService, eventLimit = 40
     staleAfterSeconds: config.staleAfterSeconds,
     agents,
     overlaps,
+    reservations: reservations.map(r => ({ pattern: r.pattern, agentId: r.agentId, exclusive: r.exclusive, expiresAt: r.expiresAt, reason: r.reason })),
+    facts: facts.map(f => ({ id: f.id, text: f.text })),
     tasks: queue.map<SnapshotTask>((task: AgentTask) => ({
       id: task.id,
       title: task.title,
