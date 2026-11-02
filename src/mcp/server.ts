@@ -6,7 +6,7 @@ import { isRemote } from '../remote/client.js';
 
 export const SERVER_NAME = 'agent-shared-memory';
 /** Keep in sync with package.json: dist/ has no package.json to read it from. */
-export const SERVER_VERSION = '1.3.0';
+export const SERVER_VERSION = '1.4.0';
 
 /** Newest first. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];

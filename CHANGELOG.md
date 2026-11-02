@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.4.0
+
+Measured with `bench/desempenho.mjs` (no model involved) on Windows, Node 24.
+
+### Faster
+
+- Every write waited up to 150 ms for files that had never been written (reservations, facts, a
+  read cursor), taking it for a file in the middle of being replaced. A write took 203 ms in
+  1.3.0; it takes 13 to 17 ms now, and stays there with 8,000 events in the journal.
+- Closed tasks are archived: past `maxClosedTasks` (default 200), the oldest move to
+  `.agents/tasks/archive/`, unless open work still points at them. With 3,020 tasks on disk,
+  claiming a task went from 1.6 s to 27 ms and the session briefing (`prime`) from 1.6 s to
+  13 ms. Archived tasks are still read by id and still satisfy dependencies; `task list --all`
+  lists them.
+- `find`, `refs` and `rename` read the project in parallel and no longer check the size of
+  every file: 0.51 s to 0.15 s across 609 files.
+- Agent states are read in parallel.
+- A write that finds the panel (`SHARED_MEMORY.md`) being regenerated leaves a mark and moves on,
+  instead of waiting its turn; the process regenerating it renders again, and a read renders first
+  when a mark is left. With 40 agent processes writing at once: 62 to about 120 writes/s, the
+  median write from 167 to 60 ms, and the panel still ends up to date.
+- A busy lock is retried after about a millisecond, doubling from there, instead of 15 to 50 ms:
+  with 5 agents, 109 to 131 writes/s.
+- The CLI loads the dashboard, the MCP server, the runner, the watcher and the symbol tools only
+  for the command that uses them: a Claude Code hook, which runs on every edit, takes 108 ms
+  instead of 143 ms.
+- The test suite runs in 9 s instead of 67 s, since the tests waited on the same delays.
+
+### Fixed
+
+- `rename` also renamed longer names that contain the word: renaming `total` turned `subtotal`
+  into `subsum`.
+- The dashboard no longer scrolls sideways on a phone; the agents table scrolls in its own box.
+- Review and queue messages were in Portuguese; they are in English like the rest.
+
+### Inside
+
+- The review gate (panels, votes, rejections) moved from `service.ts` to `reviews.ts`.
+
 ## 1.3.0
 
 Every number below was measured on real code (TypeScript, C# and Python projects, about 760

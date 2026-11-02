@@ -50,6 +50,10 @@ Every number comes from `bench/` and can be run again (details in [CHANGELOG.md]
 | Pointer returns exactly the declaration asked for (9,400 declarations, against the compilers) | C# 99.4%, TypeScript 99.3%, Python 98.8% |
 | File outline against the compilers | finds 98.5% to 99.96% of declarations; 99.6% to 100% of what it lists is real |
 | Queue with four agents from two providers | no task claimed twice, no self-review, no dependency skipped, in 40 audited runs |
+| One write to the memory, with 8,000 events in the journal | 13 ms |
+| Claiming a task with 3,000 tasks on disk | 27 ms |
+| Finding a symbol across 609 files (8.7 MB) | 0.15 s |
+| 40 agent processes writing at once | about 120 writes/s, no event lost, no file corrupted, panel up to date |
 
 
 ## Why It Exists
@@ -70,14 +74,17 @@ Agent Shared Memory solves that with a small, local and auditable coordination l
 - **local runner** for CLI agents, local model APIs or custom scripts;
 - **MCP server** so compatible clients can use memory as native tools;
 - **Git watcher** that compares real working-tree changes with declared intent;
-- **live dashboard** over SSE for agents, conflicts, inbox counts and recent activity.
+- **live dashboard** over SSE for agents, conflicts, inbox counts and recent activity;
+- **file reservations** enforced where writes happen (Claude Code hooks, git pre-commit);
+- **symbol tools** to list, find, edit and rename code by name, with a syntax check before writing;
+- **a hub** that shares one memory between machines.
 
 ## Project Status
 
 - Language: TypeScript, Node.js 20+.
 - Package: `agent-shared-memory`.
 - Binary: `agent-memory`.
-- Current version: `1.3.0`.
+- Current version: `1.4.0`.
 - Tests: `npm test`.
 - Build: `npm run build`.
 
@@ -101,9 +108,12 @@ Agent Shared Memory solves that with a small, local and auditable coordination l
 │   ├── AGENT-02.jsonl     # messages addressed to the agent
 │   └── AGENT-02.cursor.json
 ├── tasks/
-│   └── T-XXXX.json        # durable work queue
+│   ├── T-XXXX.json        # durable work queue
+│   └── archive/           # old closed tasks
 ├── schedules/
 │   └── S-XXXX.json        # cron schedules
+├── reservations.json      # files reserved by agents
+├── facts.json             # facts every session starts with
 └── .locks/                # internal write locks
 ```
 
@@ -134,6 +144,9 @@ agent-memory init --name "My Project"
 agent-memory register --agent AGENT-01 --role Backend --task AUTH-184
 agent-memory status
 agent-memory serve
+
+# With Claude Code: hooks and the MCP server in one step
+agent-memory setup claude
 ```
 
 Open the local dashboard:
@@ -455,6 +468,14 @@ agent-memory scheduler --once
 The cron parser supports five fields with `*`, `n`, `a-b`, `a,b,c` and steps. Multiple schedulers
 can run together because due schedule materialization is serialized under a lock.
 
+### Closed Tasks Are Archived
+
+Once more than `maxClosedTasks` closed tasks (default 200) sit in `.agents/tasks/`, the oldest
+move to `.agents/tasks/archive/`, so the queue stays fast however long the project runs. A closed
+task that open work still points at (a dependency, the work under an open review) stays. Archived
+tasks are still read by id, still satisfy dependencies, and are listed with `task list --all` or
+when asking for a closed status (`task list --status DONE`).
+
 ### Limits Against Runaway Spawning
 
 Any task created during another task inherits depth + 1, and exceeding `maxTaskDepth` rejects it.
@@ -550,6 +571,19 @@ Most MCP clients use this `.mcp.json` shape:
 | `memory_inbox` | Reads an agent inbox. Supports `peek` and `all`. |
 | `memory_heartbeat` | Refreshes presence during long work. |
 | `memory_log` | Reads recent global journal events, optionally filtered by agent. |
+| `memory_prime` | Start-of-session briefing: rules, project facts, who is active, reserved files, ready work, unread messages. |
+| `memory_task_ready` | Tasks this agent could claim now, most urgent first. |
+| `memory_task_show` | One task with its reviews, verdicts and every journal entry that names it. |
+| `memory_reserve` | Reserves files, folders or globs, exclusive or shared, all or nothing, for a limited time. |
+| `memory_release` | Releases this agent's reservations. |
+| `memory_reservations` | Lists the files reserved right now. |
+| `memory_remember` | Stores a short fact every session starts with. |
+| `memory_symbols` | Lists what a file declares, with line ranges, without reading it. |
+| `memory_find_symbol` | Finds where a symbol is declared in the project; `Type.member` narrows it. |
+| `memory_references` | Finds the lines that use a symbol, outside strings and comments. |
+| `memory_replace_symbol` | Replaces one function, method, class or property in place, under a lock, refusing code that breaks the file's syntax. |
+| `memory_insert_symbol` | Inserts new code right after or before an existing symbol, with the same safety. |
+| `memory_rename` | Renames a symbol across the project: a plan first, `apply` to write. |
 
 The `initialize` handshake returns the protocol instructions, so the agent receives the
 `READ -> INTENT -> CODE -> RESULT` rule without needing `AGENT_PROTOCOL.md` in the system prompt.
@@ -614,6 +648,16 @@ compact     Archive old journal and history data
 watch       Compare Git working tree changes with declared intent
 serve       Start the local dashboard
 mcp         Start the stdio MCP server
+prime       Start-of-session briefing
+reserve     Reserve files, folders or globs (release, reservations)
+remember    Store a project fact (facts, forget)
+symbols     List what a file declares
+find        Find where a symbol is declared
+refs        Find where a symbol is used
+rename      Rename a symbol across the project (--apply to write)
+setup       Install Claude Code hooks and MCP (setup claude) or the git guard (setup git)
+hook        Entry point the hooks call
+hub         Share this memory with other machines over HTTP
 ```
 
 ## Concurrency
@@ -623,15 +667,18 @@ Each agent runs in its own process and writes to the same `.agents/` directory.
 - Each `state/AGENT-X.json` write is atomic.
 - Each individual history has its own lock.
 - `events.jsonl` uses a short global lock only for appends.
-- `SHARED_MEMORY.md` is regenerated under lock and written atomically.
+- `SHARED_MEMORY.md` is regenerated by one process at a time and written atomically. A write that
+  finds it being regenerated leaves a mark and moves on; the regenerating process renders again,
+  and a read renders first when a mark is left.
 - Agents never need to edit the central file manually.
 - Abandoned locks are recovered after 30 seconds.
 - Lock contention is treated as waiting, not failure.
 - Dashboard regeneration never invalidates the write that came before it.
 
 Measured with real concurrent processes, from zero to 40 agents x 25 activities, the project kept
-1,040 events without lost events, corrupted files, contaminated histories or stuck locks. Throughput
-under 40 simultaneous processes was around 60 writes/s.
+1,040 events without lost events, corrupted files, contaminated histories or stuck locks, and the
+panel ended up to date. Throughput under 40 simultaneous processes is about 120 writes/s (60 before
+1.4.0, when every write waited its turn to regenerate the panel).
 
 ## Tests
 

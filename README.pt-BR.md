@@ -49,6 +49,10 @@ Todo número vem de `bench/` e pode ser medido de novo (detalhes no [CHANGELOG.m
 | Ponteiro devolve exatamente a declaração pedida (9.400 declarações, contra os compiladores) | C# 99,4%, TypeScript 99,3%, Python 98,8% |
 | Lista de funções contra os compiladores | acha de 98,5% a 99,96% das declarações; de 99,6% a 100% do que lista é real |
 | Fila com quatro agentes de dois fornecedores | nenhuma tarefa pega duas vezes, nenhuma autorrevisão, nenhuma dependência furada, em 40 execuções auditadas |
+| Uma escrita na memória, com 8.000 eventos no journal | 13 ms |
+| Pegar uma tarefa com 3.000 tarefas no disco | 27 ms |
+| Achar uma função em 609 arquivos (8,7 MB) | 0,15 s |
+| 40 processos de agente escrevendo ao mesmo tempo | cerca de 120 escritas/s, nenhum evento perdido, nenhum arquivo corrompido, painel em dia |
 
 
 ## Por que existe
@@ -69,14 +73,17 @@ Este projeto resolve isso com uma coordenação simples, local-first e auditáve
 - **runner local** para executar agentes por CLI, API local ou scripts próprios;
 - **servidor MCP** para expor tudo como ferramentas nativas a clientes compatíveis;
 - **watcher de Git** para comparar mudanças reais do working tree com o que foi declarado;
-- **dashboard local** via SSE para acompanhar agentes, conflitos, inbox e atividade.
+- **dashboard local** via SSE para acompanhar agentes, conflitos, inbox e atividade;
+- **reserva de arquivos** imposta onde a escrita acontece (ganchos do Claude Code, pre-commit do git);
+- **ferramentas de símbolo** para listar, achar, editar e renomear código pelo nome, com checagem de sintaxe antes de gravar;
+- **um hub** que compartilha a mesma memória entre máquinas.
 
 ## Status do projeto
 
 - Linguagem: TypeScript, Node.js 20+.
 - Pacote: `agent-shared-memory`.
 - Binário: `agent-memory`.
-- Versão atual: `1.3.0`.
+- Versão atual: `1.4.0`.
 - Testes locais: `npm test`.
 - Build: `npm run build`.
 
@@ -100,9 +107,12 @@ Este projeto resolve isso com uma coordenação simples, local-first e auditáve
 │   ├── AGENT-02.jsonl     # mensagens endereçadas ao agente
 │   └── AGENT-02.cursor.json
 ├── tasks/
-│   └── T-XXXX.json        # fila de trabalho durável
+│   ├── T-XXXX.json        # fila de trabalho durável
+│   └── archive/           # tarefas fechadas antigas
 ├── schedules/
 │   └── S-XXXX.json        # agendamentos cron
+├── reservations.json      # arquivos reservados pelos agentes
+├── facts.json             # fatos que toda sessão recebe
 └── .locks/                # locks internos de escrita
 ```
 
@@ -133,6 +143,9 @@ agent-memory init --name "Meu Projeto"
 agent-memory register --agent AGENT-01 --role Backend --task AUTH-184
 agent-memory status
 agent-memory serve
+
+# Com Claude Code: ganchos e servidor MCP num passo só
+agent-memory setup claude
 ```
 
 Abra o dashboard local:
@@ -487,6 +500,14 @@ agent-memory scheduler --once              # uma passada, para Task Scheduler/cr
 
 Cron de 5 campos com `*`, `n`, `a-b`, `a,b,c` e passos. Quando ambos os campos de dia estão restritos, basta um casar (comportamento padrão do cron). Vários schedulers podem rodar juntos: a varredura inteira é serializada e o `nextRunAt` é reavaliado dentro do lock, então um horário nunca dispara duas vezes.
 
+### Tarefas fechadas vão para o arquivo
+
+Quando há mais de `maxClosedTasks` tarefas fechadas (padrão 200) em `.agents/tasks/`, as mais
+antigas vão para `.agents/tasks/archive/`, e a fila continua rápida por mais tempo que o projeto
+dure. Uma tarefa fechada que trabalho aberto ainda cita (uma dependência, o trabalho sob revisão
+aberta) fica. Tarefas arquivadas continuam legíveis pelo id, continuam valendo como dependência e
+aparecem em `task list --all` ou ao pedir um status fechado (`task list --status DONE`).
+
 ### Limites contra spawn descontrolado
 
 Um agente que cria tarefas pode criar um agente que cria tarefas. Toda tarefa criada **durante a execução de outra** herda profundidade + 1, e passar de `maxTaskDepth` (padrão 3) é recusado:
@@ -636,6 +657,19 @@ Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `
 | `memory_inbox` | Lê as mensagens do agente. Aceita `peek` e `all`. |
 | `memory_heartbeat` | Atualiza a presença em trechos longos sem registro. |
 | `memory_log` | Últimos eventos do journal global, opcionalmente filtrados por agente. |
+| `memory_prime` | Briefing de início de sessão: regras, fatos do projeto, quem está ativo, arquivos reservados, trabalho pronto, mensagens não lidas. |
+| `memory_task_ready` | Tarefas que o agente pode pegar agora, as mais urgentes primeiro. |
+| `memory_task_show` | Uma tarefa com suas revisões, vereditos e cada evento do journal que a cita. |
+| `memory_reserve` | Reserva arquivos, pastas ou globs, exclusivo ou compartilhado, tudo ou nada, por tempo limitado. |
+| `memory_release` | Libera as reservas do agente. |
+| `memory_reservations` | Lista os arquivos reservados agora. |
+| `memory_remember` | Guarda um fato curto que toda sessão recebe. |
+| `memory_symbols` | Lista o que um arquivo declara, com as linhas, sem lê-lo inteiro. |
+| `memory_find_symbol` | Acha onde um símbolo é declarado no projeto; `Tipo.membro` restringe. |
+| `memory_references` | Acha as linhas que usam um símbolo, fora de strings e comentários. |
+| `memory_replace_symbol` | Troca uma função, método, classe ou propriedade no lugar, sob trava, recusando código que quebra a sintaxe do arquivo. |
+| `memory_insert_symbol` | Insere código novo logo depois ou antes de um símbolo, com a mesma segurança. |
+| `memory_rename` | Renomeia um símbolo no projeto: primeiro o plano, `apply` para gravar. |
 
 O handshake `initialize` já devolve o protocolo (`READ -> INTENT -> CODE -> RESULT`) no campo `instructions`, então o agente recebe as regras sem precisar do `AGENT_PROTOCOL.md` no system prompt.
 
@@ -720,6 +754,16 @@ compact     Arquiva journal e históricos antigos
 watch       Compara o working tree do Git com o que foi declarado
 serve       Abre dashboard local
 mcp         Servidor MCP em stdio
+prime       Briefing de início de sessão
+reserve     Reserva arquivos, pastas ou globs (release, reservations)
+remember    Guarda um fato do projeto (facts, forget)
+symbols     Lista o que um arquivo declara
+find        Acha onde um símbolo é declarado
+refs        Acha onde um símbolo é usado
+rename      Renomeia um símbolo no projeto (--apply para gravar)
+setup       Instala ganchos e MCP do Claude Code (setup claude) ou a guarda do git (setup git)
+hook        Ponto de entrada que os ganchos chamam
+hub         Compartilha esta memória com outras máquinas por HTTP
 ```
 
 ## Concorrência
@@ -729,13 +773,15 @@ Cada agente roda no seu próprio processo, escrevendo no mesmo `.agents/`.
 - Cada `state/AGENT-X.json` é escrito atomicamente.
 - Cada histórico individual possui lock próprio.
 - O `events.jsonl` possui lock global curto somente no append.
-- `SHARED_MEMORY.md` é regenerado sob lock e escrito atomicamente.
+- `SHARED_MEMORY.md` é regenerado por um processo de cada vez e escrito atomicamente. Uma escrita que
+  o encontra sendo regenerado deixa uma marca e segue; o processo que está regenerando refaz no fim,
+  e uma leitura refaz antes quando há marca.
 - Os agentes nunca precisam editar o arquivo central manualmente.
 - Um lock deixado para trás por um processo morto é recuperado após 30 segundos, em vez de travar o `.agents/` até alguém apagar o arquivo na mão.
 - Contenção de lock é tratada como espera, não como erro. No Windows, um arquivo em *pending-delete* ou aberto por outro leitor retorna `EPERM`/`EACCES`/`EBUSY` em vez de `EEXIST`; tratar isso como falha derruba o agente exatamente sob carga. O `rename` da escrita atômica tem a mesma proteção, e o arquivo temporário é removido se ainda assim falhar.
 - **A regeneração do painel nunca derruba a escrita que a precede.** `state/` e `events.jsonl` são gravados antes e são a fonte da verdade; o `SHARED_MEMORY.md` é derivado. Se o lock do painel estiver muito disputado, a escrita permanece durável e o próximo agente regenera a partir do disco.
 
-Medido em processos concorrentes de verdade, do zero até 40 agentes × 25 atividades (1.040 eventos): nenhum evento perdido, nenhum arquivo corrompido, nenhum histórico contaminado, nenhum lock preso, e o painel permanecendo em dia. A vazão sob 40 processos simultâneos ficou em torno de 60 escritas/s: o `refreshSharedMemory` serializa no lock global, que é o teto de escala.
+Medido em processos concorrentes de verdade, do zero até 40 agentes × 25 atividades (1.040 eventos): nenhum evento perdido, nenhum arquivo corrompido, nenhum histórico contaminado, nenhum lock preso, e o painel permanecendo em dia. A vazão sob 40 processos simultâneos é de cerca de 120 escritas/s (60 antes da 1.4.0, quando toda escrita esperava a vez de regenerar o painel).
 
 Para referência, `status` e o dashboard leem `state/` diretamente, então mostram o estado corrente mesmo que o `SHARED_MEMORY.md` esteja momentaneamente atrás.
 
