@@ -67,3 +67,18 @@ paths from `path.join`. Before trusting a "nothing blocked", make the same check
 purpose.
 
 Test: not a code change; the unit tests call `runClaudeHook` with `path.join` paths for this reason.
+
+## 2026-11-07: a deleted session still counted as present
+
+What happened: while wiring the shell guard into a real workspace, a throwaway session was used to
+test the hooks and then unregistered. Its edit left an INTENT event in the journal, and the guard
+read the journal without asking whether that session still existed: for the next 30 minutes it
+would have counted as "another session in jva-editora" and could have blocked a real one.
+
+Why: presence came from two places, agent states and journal events, and only the first one knew
+about sessions that ended. A journal outlives the sessions that wrote it.
+
+Fix (1.5.0, before release): only sessions that still have a state and did not end (SessionEnd)
+count as present, whether seen through the state or through the journal.
+
+Test: `tests/shellguard.test.ts`, "a session that was unregistered blocks nobody".
