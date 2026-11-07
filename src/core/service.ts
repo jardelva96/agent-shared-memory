@@ -874,11 +874,12 @@ export class AgentMemoryService {
     const inPlace = (file?: string): file is string =>
       !!file && (place === '.' || file === place || file.startsWith(`${place}/`));
     const states = await this.store.listStates();
-    // A session that ended (SessionEnd) is no longer in the way, whatever it did before.
-    const ended = new Set(states.filter(s => s.status === 'OFFLINE').map(s => s.id));
+    // Only sessions that still exist and have not ended (SessionEnd) are in the way: an unregistered
+    // or finished one left events in the journal, not work in the checkout.
+    const live = new Set(states.filter(s => s.status !== 'OFFLINE').map(s => s.id));
     const others = new Map<string, GuardContext['others'][number]>();
     const seen = (entry: GuardContext['others'][number]) => {
-      if (ended.has(entry.id)) return;
+      if (!live.has(entry.id)) return;
       const previous = others.get(entry.id);
       if (!previous || previous.at < entry.at) others.set(entry.id, entry);
     };
@@ -900,7 +901,7 @@ export class AgentMemoryService {
         continue;
       }
       if (event.type === 'NOTE' && event.description.startsWith('git: ') && file === place) {
-        if (ended.has(event.agentId)) continue;
+        if (!live.has(event.agentId)) continue;
         gitOps.push({ id: event.agentId, at: event.timestamp, description: event.description.slice(5) });
         seen({ id: event.agentId, at: event.timestamp, how: 'shell', doing: event.description });
         continue;

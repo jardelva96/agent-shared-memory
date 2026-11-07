@@ -183,6 +183,18 @@ test('a session that ended blocks nobody', async () => {
   });
 });
 
+test('a session that was unregistered blocks nobody, though its events stay in the journal', async () => {
+  await withWorkspace(async (root, app, service) => {
+    const file = path.join(app, 'src', 'senha.cs');
+    const edit = JSON.stringify({ session_id: 'x', cwd: root, tool_name: 'Edit', tool_input: { file_path: file } });
+    await runClaudeHook('pre-write', edit, as('ONE'));
+    await writeFile(file, 'mudou\n');
+    await runClaudeHook('post-write', edit, as('ONE'));
+    await service.unregister('ONE');
+    assert.equal((await runClaudeHook('pre-shell', shell(root, `cd "${app}" && git stash`), as('TWO'))).exitCode, 0);
+  });
+});
+
 test('git add -A refuses to sweep another session new file into a commit; naming files is fine', async () => {
   await withWorkspace(async (root, app) => {
     await shellWrite(root, 'ONE', path.join(app, 'src', 'novo-da-um.cs'), 'class Novo {}\n');
