@@ -38,7 +38,11 @@ export const REMOTE_METHODS = new Set([
   'reservations.holders',
   'facts.list',
   'schedules.list',
-  'schedules.remove'
+  'schedules.remove',
+  'notePlaces',
+  'noteShellWrites',
+  'guardContext',
+  'noteGuard'
 ]);
 
 const MAX_BODY = 1_000_000;

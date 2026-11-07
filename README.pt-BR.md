@@ -366,6 +366,25 @@ Por padrão, um agente sem heartbeat/atividade por mais de 60 segundos aparece c
 agent-memory config --stale 120
 ```
 
+## Trava do terminal
+
+Troca de branch e edição feita pelo terminal passam por fora dos ganchos de edição, então o
+`setup claude` também instala os ganchos `pre-shell` e `post-shell` no Bash e no PowerShell. Eles
+anotam em que checkout cada sessão trabalha (seguindo `cd`, `Set-Location` e `git -C`) e quais
+arquivos os comandos dela gravaram.
+
+Um comando git que mexe no checkout (`checkout`, `switch`, `stash`, `reset`, `restore`, `pull`,
+`merge`, `rebase`, `clean`, `cherry-pick`, `revert`, `am`) ou que põe tudo num commit (`add -A`,
+`add .`, `commit -a`) é recusado enquanto outra sessão trabalha ali e há mudanças recentes que esta
+sessão não fez, ou logo depois de outra sessão mudar a branch. A mensagem lista os arquivos, a
+idade de cada um e as sessões vistas no checkout.
+
+Quando as mudanças são suas, termine o comando com `# asm-ok: <motivo>`: ele passa e o motivo fica
+guardado. `agent-memory guard-log` lista cada bloqueio e cada asm-ok, e é assim que o
+[LESSONS.md](LESSONS.md) aprende onde a trava errou. `guardMinutes` no `.agents/config.json` define a
+janela (padrão 30; 0 desliga), e `primeRules` troca as regras do resumo do começo da sessão.
+`setup claude --hooks-only` não instala o servidor MCP.
+
 ## Detecção de conflito
 
 Se `AGENT-01` estiver trabalhando em:

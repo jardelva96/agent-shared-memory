@@ -13,7 +13,8 @@ export const DEFAULT_CONFIG: ProjectConfig = {
   maxTaskDepth: 3,
   maxTaskAttempts: 3,
   maxReviewRounds: 3,
-  maxClosedTasks: 200
+  maxClosedTasks: 200,
+  guardMinutes: 30
 };
 
 export async function configExists(root = process.cwd()): Promise<boolean> {

@@ -4,7 +4,9 @@ import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { AgentMemoryService } from '../core/service.js';
-import { localTime } from '../utils/time.js';
+import { isReadOnly, parseShell, ParsedShell, summarize } from '../core/shellguard.js';
+import { dirtyFiles, findRepo } from '../git/repo.js';
+import { localTime, nowIso } from '../utils/time.js';
 import { remoteFromEnv, remoteService } from '../remote/client.js';
 
 function gitTopLevel(cwd: string): string | undefined {
@@ -41,6 +43,115 @@ export function sessionAgent(env: NodeJS.ProcessEnv, sessionId?: string): string
 }
 
 const WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
+const SHELL_TOOLS = /^(Bash|PowerShell)$/;
+
+/** Another session counts as still in a checkout if it was seen there this recently. */
+const STILL_THERE_MS = 10 * 60_000;
+
+/** The checkout a folder belongs to, as a root-relative key ("." for the root), if it is under the root. */
+function placeOf(root: string, dir: string): { key: string; repo: string } | undefined {
+  const repo = findRepo(dir);
+  if (!repo) return undefined;
+  const rel = path.relative(root, repo).split(path.sep).join('/');
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+  return { key: rel || '.', repo };
+}
+
+function placesOf(root: string, parsed: ParsedShell): Map<string, string> {
+  const places = new Map<string, string>();
+  for (const dir of parsed.dirs) {
+    const place = placeOf(root, dir);
+    if (place) places.set(place.key, place.repo);
+  }
+  return places;
+}
+
+function ago(iso: string | number): string {
+  const minutes = Math.max(0, Math.round((Date.now() - (typeof iso === 'number' ? iso : Date.parse(iso))) / 60_000));
+  return minutes < 1 ? 'just now' : `${minutes} min ago`;
+}
+
+/**
+ * Before a shell command: a git command that changes a checkout (switch branch, stash, reset, pull,
+ * commit everything...) is refused while another session works in that checkout and there are
+ * recent changes this session did not make, or while another session just moved its branch.
+ */
+async function guardShell(service: AgentMemoryService, root: string, agentId: string, parsed: ParsedShell): Promise<HookOutcome | undefined> {
+  const risky = parsed.git.filter(step => step.risk);
+  if (risky.length === 0) return undefined;
+  const minutes = (await service.config()).guardMinutes ?? 30;
+  const notes: Array<[string, string]> = [];
+  const problems: string[] = [];
+
+  for (const step of risky) {
+    const place = placeOf(root, step.dir);
+    if (!place) continue;
+    const gitNote = (): void => {
+      if (step.risk === 'branch') notes.push([`git: ${step.text}`, place.key]);
+    };
+    if (minutes <= 0) {
+      gitNote();
+      continue;
+    }
+    if (parsed.acknowledged !== undefined) {
+      notes.push([`guard: let through by asm-ok (${parsed.acknowledged || 'no reason given'}): ${step.text}`, place.key]);
+      gitNote();
+      continue;
+    }
+
+    const since = new Date(Date.now() - minutes * 60_000).toISOString();
+    const context = await service.guardContext(agentId, place.key, since);
+    const mine = new Set(context.mine);
+    const prefix = place.key === '.' ? '' : `${place.key}/`;
+    const sinceMs = Date.parse(since);
+    const foreign = (await dirtyFiles(place.repo, { untracked: step.risk === 'sweep' })).filter(
+      f => f.modifiedMs !== undefined && f.modifiedMs >= sinceMs && !mine.has(prefix + f.path)
+    );
+    const stillThere = new Set(context.others.filter(o => Date.now() - Date.parse(o.at) <= STILL_THERE_MS).map(o => o.id));
+    const theirGit = step.risk === 'branch' ? context.gitOps.filter(op => stillThere.has(op.id)) : [];
+
+    if ((foreign.length > 0 && context.others.length > 0) || theirGit.length > 0) {
+      const lines = [`\`${step.text}\` would change the checkout ${place.key} while another session works in it.`];
+      if (foreign.length > 0) {
+        lines.push(`Uncommitted changes this session did not make, from the last ${minutes} min:`);
+        for (const f of foreign.slice(0, 6)) lines.push(`  ${f.path} (${ago(f.modifiedMs!)})`);
+        if (foreign.length > 6) lines.push(`  ... and ${foreign.length - 6} more`);
+      }
+      for (const op of theirGit.slice(0, 3)) lines.push(`${op.id} ran \`${op.description}\` here ${ago(op.at)}.`);
+      lines.push(`Sessions seen in ${place.key}: ${context.others.map(o => `${o.id} (${o.how}, ${ago(o.at)}${o.doing ? `: ${o.doing.slice(0, 60)}` : ''})`).join('; ')}.`);
+      problems.push(lines.join('\n'));
+      notes.push([`guard: blocked ${step.text} (${foreign.length} change(s) not made here; others: ${context.others.map(o => o.id).join(', ')})`, place.key]);
+    } else {
+      if (foreign.length > 0) notes.push([`guard: let through ${step.text} with ${foreign.length} recent change(s) nobody here claimed`, place.key]);
+      gitNote();
+    }
+  }
+
+  // A blocked command did not run: only its block is written down, not its git steps.
+  for (const [description, place] of problems.length ? notes.filter(([d]) => d.startsWith('guard: blocked')) : notes) {
+    await service.noteGuard(agentId, description, place);
+  }
+  if (problems.length === 0) return undefined;
+  return {
+    exitCode: 2,
+    stderr:
+      `${problems.join('\n\n')}\n\n` +
+      'Do not switch, stash, reset or commit everything under another session: message it, or ask the user.\n' +
+      'If those changes are yours (made through the shell), run the same command again ending with `# asm-ok: <why>`.'
+  };
+}
+
+/** After a shell command: the files it wrote become this session's, so its own changes never block it. */
+async function noteShellWrites(service: AgentMemoryService, root: string, agentId: string, parsed: ParsedShell): Promise<void> {
+  const files: Array<{ path: string; modifiedMs: number }> = [];
+  for (const [key, repo] of placesOf(root, parsed)) {
+    const prefix = key === '.' ? '' : `${key}/`;
+    for (const f of await dirtyFiles(repo, { untracked: true })) {
+      if (f.modifiedMs !== undefined) files.push({ path: prefix + f.path, modifiedMs: f.modifiedMs });
+    }
+  }
+  if (files.length) await service.noteShellWrites(agentId, files);
+}
 
 export async function runClaudeHook(event: string, input: string, env: NodeJS.ProcessEnv = process.env): Promise<HookOutcome> {
   let payload: Record<string, any> = {};
@@ -69,6 +180,18 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
 
     if (event === 'session-end') {
       await service.release(agentId);
+      await service.notePlaces(agentId, [], { clear: true });
+      return { exitCode: 0 };
+    }
+
+    if ((event === 'pre-shell' || event === 'post-shell') && SHELL_TOOLS.test(payload.tool_name ?? '')) {
+      const command = String(payload.tool_input?.command ?? '');
+      const parsed = parseShell(command, cwd);
+      if (event === 'pre-shell') {
+        await service.notePlaces(agentId, [...placesOf(root, parsed).keys()], { startedAt: nowIso(), summary: summarize(command) });
+        return (await guardShell(service, root, agentId, parsed)) ?? { exitCode: 0 };
+      }
+      if (!isReadOnly(command)) await noteShellWrites(service, root, agentId, parsed);
       return { exitCode: 0 };
     }
 
@@ -150,26 +273,32 @@ export function selfCommand(): string {
   return /\.(c?js|mjs)$/.test(script) ? `node "${script.split(path.sep).join('/')}"` : 'agent-memory';
 }
 
-/** Wires the hooks and the MCP server into a project's Claude Code settings. */
-export async function setupClaude(root: string, options: { remove?: boolean; command?: string } = {}): Promise<string[]> {
+/** Wires the hooks (and, unless `hooksOnly`, the MCP server) into a project's Claude Code settings. */
+export async function setupClaude(root: string, options: { remove?: boolean; command?: string; hooksOnly?: boolean } = {}): Promise<string[]> {
   const command = options.command ?? selfCommand();
   const done: string[] = [];
 
   const settingsFile = path.join(root, '.claude', 'settings.json');
   const settings = await readJsonFile(settingsFile);
   settings.hooks ??= {};
-  const wanted: Record<string, { matcher: string; event: string }> = {
-    SessionStart: { matcher: '', event: 'session-start' },
-    PreToolUse: { matcher: 'Write|Edit|MultiEdit|NotebookEdit', event: 'pre-write' },
-    PostToolUse: { matcher: 'Write|Edit|MultiEdit|NotebookEdit', event: 'post-write' },
-    SessionEnd: { matcher: '', event: 'session-end' }
-  };
-  for (const [hookEvent, spec] of Object.entries(wanted)) {
+  const wanted: Array<{ hookEvent: string; matcher: string; event: string }> = [
+    { hookEvent: 'SessionStart', matcher: '', event: 'session-start' },
+    { hookEvent: 'PreToolUse', matcher: 'Write|Edit|MultiEdit|NotebookEdit', event: 'pre-write' },
+    { hookEvent: 'PreToolUse', matcher: 'Bash|PowerShell', event: 'pre-shell' },
+    { hookEvent: 'PostToolUse', matcher: 'Write|Edit|MultiEdit|NotebookEdit', event: 'post-write' },
+    { hookEvent: 'PostToolUse', matcher: 'Bash|PowerShell', event: 'post-shell' },
+    { hookEvent: 'SessionEnd', matcher: '', event: 'session-end' }
+  ];
+  for (const hookEvent of new Set(wanted.map(w => w.hookEvent))) {
     const groups: any[] = Array.isArray(settings.hooks[hookEvent]) ? settings.hooks[hookEvent] : [];
     const others = groups
       .map(g => ({ ...g, hooks: (g.hooks ?? []).filter((h: any) => !String(h.command ?? '').includes(HOOK_MARK)) }))
       .filter(g => g.hooks.length > 0);
-    if (!options.remove) others.push({ matcher: spec.matcher, hooks: [{ type: 'command', command: `${command}${HOOK_MARK}${spec.event}` }] });
+    if (!options.remove) {
+      for (const spec of wanted.filter(w => w.hookEvent === hookEvent)) {
+        others.push({ matcher: spec.matcher, hooks: [{ type: 'command', command: `${command}${HOOK_MARK}${spec.event}` }] });
+      }
+    }
     if (others.length) settings.hooks[hookEvent] = others;
     else delete settings.hooks[hookEvent];
   }
@@ -178,7 +307,11 @@ export async function setupClaude(root: string, options: { remove?: boolean; com
   await writeFile(settingsFile, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   done.push(`${options.remove ? 'removed hooks from' : 'hooks written to'} .claude/settings.json`);
 
+  // Hooks only: no MCP server process per session, and an existing entry is left as it is.
+  if (options.hooksOnly && !options.remove) return done;
+
   const mcpFile = path.join(root, '.mcp.json');
+  if (options.remove && !existsSync(mcpFile)) return done;
   const mcp = await readJsonFile(mcpFile);
   mcp.mcpServers ??= {};
   if (options.remove) delete mcp.mcpServers['agent-memory'];

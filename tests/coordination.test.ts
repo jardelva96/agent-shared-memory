@@ -128,9 +128,10 @@ test('setup claude writes the hooks and the MCP server, keeps other hooks, and r
     await setupClaude(root, { command: 'agent-memory' });
     await setupClaude(root, { command: 'agent-memory' }); // twice is the same as once
     const settings = JSON.parse(await readFile(path.join(root, '.claude', 'settings.json'), 'utf8'));
-    assert.equal(settings.hooks.PreToolUse.length, 2);
+    assert.equal(settings.hooks.PreToolUse.length, 3);
     assert.deepEqual(settings.hooks.PreToolUse[0].hooks, [mine]);
     assert.equal(settings.hooks.PreToolUse[1].hooks[0].command, 'agent-memory hook claude pre-write');
+    assert.equal(settings.hooks.PreToolUse[2].hooks[0].command, 'agent-memory hook claude pre-shell');
     assert.equal(settings.hooks.SessionStart[0].hooks[0].command, 'agent-memory hook claude session-start');
     const mcp = JSON.parse(await readFile(path.join(root, '.mcp.json'), 'utf8'));
     assert.deepEqual(mcp.mcpServers['agent-memory'], { command: 'agent-memory', args: ['mcp'] });

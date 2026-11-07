@@ -47,6 +47,24 @@ export interface AgentState {
   startedAt: string;
   updatedAt: string;
   lastHeartbeatAt: string;
+  /** Checkouts this agent ran shell commands in (root-relative, "." for the root), with the last time. */
+  places?: Record<string, string>;
+  /** Files this agent changed through the shell (root-relative), with when it was seen. */
+  touched?: Record<string, string>;
+  /** When the agent's current shell command started; files written after it are the agent's. */
+  shellStartedAt?: string;
+  /** The programs its last shell command ran, without arguments, so others can tell who it is. */
+  lastShell?: string;
+}
+
+/** What the shell guard knows about one checkout, for the agent about to change it. */
+export interface GuardContext {
+  /** Other agents seen in the checkout inside the window. */
+  others: Array<{ id: string; at: string; how: 'shell' | 'edit'; doing?: string }>;
+  /** Branch-changing git commands other agents ran there inside the window. */
+  gitOps: Array<{ id: string; at: string; description: string }>;
+  /** Root-relative files this agent wrote inside the window, by edit tool or shell. */
+  mine: string[];
 }
 
 export interface AgentActivity {
@@ -185,4 +203,11 @@ export interface ProjectConfig {
   maxReviewRounds: number;
   /** Closed tasks kept in the queue folder before the oldest are archived. 0 keeps them all. */
   maxClosedTasks?: number;
+  /**
+   * How far back (minutes) the shell guard looks for other sessions and their changes before it lets
+   * a git command change a shared checkout. 0 turns the guard off.
+   */
+  guardMinutes?: number;
+  /** Replaces the default "How to work here" lines of the session briefing. */
+  primeRules?: string[];
 }

@@ -351,6 +351,32 @@ agent-memory config --stale 120
 
 By default, an agent with no heartbeat or activity for more than 60 seconds appears as `OFFLINE`.
 
+## Shell Guard
+
+Branch switches and edits made through the shell bypass the editor hooks, so `setup claude` also
+installs `pre-shell` and `post-shell` hooks on Bash and PowerShell. They note which checkout each
+session works in (following `cd`, `Set-Location` and `git -C`) and which files its own commands
+wrote.
+
+A git command that moves a checkout (`checkout`, `switch`, `stash`, `reset`, `restore`, `pull`,
+`merge`, `rebase`, `clean`, `cherry-pick`, `revert`, `am`) or sweeps everything into a commit
+(`add -A`, `add .`, `commit -a`) is refused while another session works in that checkout and
+there are recent uncommitted changes this session did not make, or while another session just
+moved the branch:
+
+```text
+`git checkout -b fix/x origin/prod` would change the checkout app while another session works in it.
+Uncommitted changes this session did not make, from the last 30 min:
+  src/Pages/Senha.cshtml (4 min ago)
+Sessions seen in app: CC-9B000001 (shell, 2 min ago: cd && dotnet).
+```
+
+When the changes are yours, end the command with `# asm-ok: <why>`; it goes through and the reason
+is kept. `agent-memory guard-log` lists every block and every asm-ok, which is how
+[LESSONS.md](LESSONS.md) learns where the guard was wrong. `guardMinutes` in `.agents/config.json`
+sets the window (default 30; 0 turns the guard off), and `primeRules` replaces the default rules of
+the session briefing. `setup claude --hooks-only` skips the MCP server.
+
 ## Conflict Detection
 
 If `AGENT-01` is working on:

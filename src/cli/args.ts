@@ -17,7 +17,8 @@ const BOOLEAN_FLAGS = new Set([
   'help',
   'shared',
   'remove',
-  'apply'
+  'apply',
+  'hooks-only'
 ]);
 
 /** The command is the first bare word, so global flags may come before or after it. */

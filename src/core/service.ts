@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, AgentTask, CodePointer, Conflict, ProjectConfig, ProjectFact, TaskSchedule, TaskStatus } from '../models/types.js';
+import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, AgentTask, CodePointer, Conflict, GuardContext, ProjectConfig, ProjectFact, TaskSchedule, TaskStatus } from '../models/types.js';
 import { createId, createScheduleId, createSessionId, createTaskId } from '../utils/ids.js';
 import { localTime, nowIso } from '../utils/time.js';
 import { readConfig, writeConfig, DEFAULT_CONFIG } from './config.js';
@@ -325,14 +325,15 @@ export class AgentMemoryService {
     ]);
     const lines = [`# Agent Shared Memory: ${config.projectName}`, ''];
     if (agentId) lines.push(`You are ${agentId}. Other agents may be working in this repository at the same time.`, '');
-    lines.push(
-      'How to work here:',
-      '- Before changing a file, reserve it (memory_reserve, or `agent-memory reserve`). A file another agent reserved is theirs until released.',
-      '- Change one function or class with memory_replace_symbol instead of rewriting the file: it re-reads the file at write time, so other agents\' changes survive.',
-      '- Read code by pointer (memory_read_pointer "file::Type.member") instead of whole files.',
-      '- After a change, record it (memory_record CHANGED); release your reservations when done.',
-      ''
-    );
+    const rules = config.primeRules?.length
+      ? config.primeRules
+      : [
+          'Before changing a file, reserve it (memory_reserve, or `agent-memory reserve`). A file another agent reserved is theirs until released.',
+          'Change one function or class with memory_replace_symbol instead of rewriting the file: it re-reads the file at write time, so other agents\' changes survive.',
+          'Read code by pointer (memory_read_pointer "file::Type.member") instead of whole files.',
+          'After a change, record it (memory_record CHANGED); release your reservations when done.'
+        ];
+    lines.push('How to work here:', ...rules.map(rule => `- ${rule}`), '');
     if (facts.length) lines.push('Project facts:', ...facts.map(f => `- ${f.text}`), '');
     const others = states.filter(s => s.id !== agentId && effectiveStatus(s, config) !== 'OFFLINE');
     if (others.length) {
@@ -826,6 +827,99 @@ export class AgentMemoryService {
     return this.store.listStates();
   }
 
+  // ----- Shell guard -----
+
+  /**
+   * Remembers which checkouts the agent's shell command works in and when the command started.
+   * `clear` forgets them, at the end of a session, so a finished session blocks nobody.
+   */
+  async notePlaces(agentId: string, places: string[], options: { startedAt?: string; clear?: boolean; summary?: string } = {}): Promise<void> {
+    if (!(await this.store.stateExists(agentId))) return;
+    const state = await this.store.readState(agentId);
+    const now = nowIso();
+    const next: AgentState = { ...state, lastHeartbeatAt: now };
+    if (options.clear) {
+      delete next.places;
+      delete next.touched;
+      delete next.shellStartedAt;
+      next.status = 'OFFLINE';
+    } else {
+      next.places = newestEntries({ ...(state.places ?? {}), ...Object.fromEntries(places.map(p => [p, now])) }, 40);
+      if (options.startedAt) next.shellStartedAt = options.startedAt;
+      if (options.summary) next.lastShell = options.summary.slice(0, 80);
+      // A resumed session is back.
+      if (state.status === 'OFFLINE') next.status = 'ONLINE';
+    }
+    await this.store.writeState(next);
+  }
+
+  /** Keeps, as the agent's own, the files its shell command wrote: those changed after it started. */
+  async noteShellWrites(agentId: string, files: Array<{ path: string; modifiedMs: number }>): Promise<string[]> {
+    if (!(await this.store.stateExists(agentId))) return [];
+    const state = await this.store.readState(agentId);
+    const start = state.shellStartedAt ? Date.parse(state.shellStartedAt) : NaN;
+    if (!Number.isFinite(start)) return [];
+    // File times can trail the clock a little; two seconds of slack.
+    const mine = files.filter(f => f.modifiedMs >= start - 2000).map(f => f.path);
+    if (mine.length === 0) return [];
+    const now = nowIso();
+    const touched = newestEntries({ ...(state.touched ?? {}), ...Object.fromEntries(mine.map(f => [f, now])) }, 500);
+    await this.store.writeState({ ...state, touched });
+    return mine;
+  }
+
+  /** Who else was in a checkout since `since`, which git commands they ran there, and what this agent wrote. */
+  async guardContext(agentId: string, place: string, since: string): Promise<GuardContext> {
+    const sinceMs = Date.parse(since);
+    const inPlace = (file?: string): file is string =>
+      !!file && (place === '.' || file === place || file.startsWith(`${place}/`));
+    const states = await this.store.listStates();
+    // A session that ended (SessionEnd) is no longer in the way, whatever it did before.
+    const ended = new Set(states.filter(s => s.status === 'OFFLINE').map(s => s.id));
+    const others = new Map<string, GuardContext['others'][number]>();
+    const seen = (entry: GuardContext['others'][number]) => {
+      if (ended.has(entry.id)) return;
+      const previous = others.get(entry.id);
+      if (!previous || previous.at < entry.at) others.set(entry.id, entry);
+    };
+    for (const s of states) {
+      const at = s.places?.[place];
+      if (s.id !== agentId && at && Date.parse(at) >= sinceMs) seen({ id: s.id, at, how: 'shell', doing: s.lastShell ?? s.current?.description });
+    }
+    const mine = new Set<string>();
+    const me = states.find(s => s.id === agentId);
+    for (const [file, at] of Object.entries(me?.touched ?? {})) {
+      if (Date.parse(at) >= sinceMs && inPlace(file)) mine.add(file);
+    }
+    const gitOps: GuardContext['gitOps'] = [];
+    for (const event of await this.store.recentActivities(2000)) {
+      if (Date.parse(event.timestamp) < sinceMs) continue;
+      const file = event.pointer?.file;
+      if (event.agentId === agentId) {
+        if ((event.type === 'CHANGED' || event.type === 'CREATED') && inPlace(file)) mine.add(file);
+        continue;
+      }
+      if (event.type === 'NOTE' && event.description.startsWith('git: ') && file === place) {
+        if (ended.has(event.agentId)) continue;
+        gitOps.push({ id: event.agentId, at: event.timestamp, description: event.description.slice(5) });
+        seen({ id: event.agentId, at: event.timestamp, how: 'shell', doing: event.description });
+        continue;
+      }
+      if ((event.type === 'CHANGED' || event.type === 'CREATED' || event.type === 'INTENT') && inPlace(file)) {
+        seen({ id: event.agentId, at: event.timestamp, how: 'edit', doing: event.description });
+      }
+    }
+    return { others: [...others.values()], gitOps, mine: [...mine] };
+  }
+
+  /** A line in the journal about the guard: what it let through, blocked, or was told to let through. */
+  async noteGuard(agentId: string, description: string, place?: string): Promise<void> {
+    await this.store.appendActivity(
+      this.makeActivity({ agentId, type: 'NOTE', description, ...(place ? { pointer: { file: place } } : {}) }),
+      { history: false }
+    );
+  }
+
   private async requireAgent(agentId: string): Promise<AgentState> {
     if (!(await this.store.stateExists(agentId))) {
       throw new Error(`Agent not registered: ${agentId}. Run register first.`);
@@ -846,6 +940,17 @@ export class AgentMemoryService {
       timestamp
     };
   }
+}
+
+/** The newest entries of a name-to-time map, none older than a day. */
+function newestEntries(map: Record<string, string>, max: number): Record<string, string> {
+  const cutoff = Date.now() - 24 * 3600_000;
+  return Object.fromEntries(
+    Object.entries(map)
+      .filter(([, at]) => Date.parse(at) >= cutoff)
+      .sort((a, b) => b[1].localeCompare(a[1]))
+      .slice(0, max)
+  );
 }
 
 function statusFor(type: ActivityType, previous: AgentStatus): AgentStatus {

@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.5.0
+
+### The shell guard
+
+Two sessions in the same checkout: one switched the branch while the other had uncommitted work
+on it (see LESSONS.md, 2026-11-07). The hooks saw only the edit tools, and both the switch and the
+other session's edits went through the shell.
+
+- `pre-shell` and `post-shell` hooks on Bash and PowerShell. Before a command, the session's
+  checkouts are noted (following `cd`, `Set-Location` and `git -C`); after a command that may
+  write, the files it wrote become the session's own.
+- A git command that moves a checkout (checkout, switch, stash, reset, restore, pull, merge,
+  rebase, clean, cherry-pick, revert, am) or sweeps everything into a commit (`add -A`,
+  `add .`, `commit -a`) is refused while another session works in that checkout and there are
+  recent changes this session did not make, or while another session just moved the branch. The
+  message lists the files, their age and the sessions seen there.
+- `# asm-ok: <why>` at the end of the command lets it through; the reason is kept.
+- `agent-memory guard-log` lists every block, every asm-ok and every change let through that no
+  session claimed: the record to learn from.
+- A session that ended (SessionEnd) blocks nobody.
+- Quoted text and heredocs are not read as commands. What other sessions see of a command is only
+  the programs it ran (`cd && git push`), never its arguments, so a token on a command line is
+  not copied anywhere.
+- Config: `guardMinutes` (default 30; 0 turns it off) and `primeRules`, which replaces the default
+  rules in the session briefing.
+- `setup claude --hooks-only` installs the hooks without the MCP server.
+- LESSONS.md: every mistake met in real use, why it happened, the fix and its test.
+
 ## 1.4.0
 
 Measured with `bench/desempenho.mjs` (no model involved) on Windows, Node 24.

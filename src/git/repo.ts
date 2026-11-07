@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { existsSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -111,4 +113,50 @@ export function describeChange(change: GitChange): string {
     parts.push(`+${change.insertions}/-${change.deletions}`);
   }
   return parts.join(' ');
+}
+
+/** The checkout a folder belongs to: the nearest folder at or above it that holds `.git`. */
+export function findRepo(dir: string): string | undefined {
+  let current = path.resolve(dir);
+  while (true) {
+    if (existsSync(path.join(current, '.git'))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+export interface DirtyFile {
+  /** Repository-relative path, forward slashes. */
+  path: string;
+  untracked: boolean;
+  /** Last write, or undefined when the file is gone (deleted). */
+  modifiedMs?: number;
+}
+
+/** Uncommitted files with their last write time; only status, no line counts, so it stays fast. */
+export async function dirtyFiles(repo: string, options: { untracked?: boolean } = {}): Promise<DirtyFile[]> {
+  let porcelain: string;
+  try {
+    porcelain = await git(repo, ['status', '--porcelain=v1', '-z', options.untracked ? '-uall' : '-uno']);
+  } catch {
+    return [];
+  }
+  const records = porcelain.split('\0');
+  const files: DirtyFile[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    if (code[0] === 'R' || code[0] === 'C') i++;
+    const file = normalize(record.slice(3));
+    let modifiedMs: number | undefined;
+    try {
+      modifiedMs = statSync(path.join(repo, file)).mtimeMs;
+    } catch {
+      modifiedMs = undefined;
+    }
+    files.push({ path: file, untracked: code === '??', modifiedMs });
+  }
+  return files;
 }

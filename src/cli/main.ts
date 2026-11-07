@@ -83,6 +83,24 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'guard-log': {
+      // What the shell guard blocked, let through, or was told to let through: the record to learn from.
+      const limit = numberFlag(parsed.flags, 'limit') ?? 30;
+      const events = (await service.store.recentActivities(5000))
+        .filter(e => e.type === 'NOTE' && (e.description.startsWith('guard: ') || e.description.startsWith('git: ')))
+        .slice(-limit);
+      if (parsed.flags.json) {
+        console.log(JSON.stringify(events, null, 2));
+        break;
+      }
+      if (events.length === 0) {
+        console.log('The shell guard has nothing on record yet.');
+        break;
+      }
+      for (const e of events) console.log(`${e.timestamp} | ${e.agentId} | ${e.pointer?.file ?? '-'} | ${e.description}`);
+      break;
+    }
+
     case 'compact': {
       const result = await service.compact({
         keep: numberFlag(parsed.flags, 'keep'),
@@ -638,7 +656,7 @@ async function main(): Promise<void> {
           : kind === 'pre-commit'
             ? await runGitPreCommit(root)
             : undefined;
-      if (!outcome) throw new Error('Use: hook claude <session-start|pre-write|post-write|session-end>, or hook pre-commit.');
+      if (!outcome) throw new Error('Use: hook claude <session-start|pre-write|post-write|pre-shell|post-shell|session-end>, or hook pre-commit.');
       if (outcome.stdout) process.stdout.write(`${outcome.stdout}\n`);
       if (outcome.stderr) process.stderr.write(`${outcome.stderr}\n`);
       process.exitCode = outcome.exitCode;
@@ -647,10 +665,10 @@ async function main(): Promise<void> {
 
     case 'setup': {
       const target = parsed.positionals[0];
-      const options = { remove: parsed.flags.remove === true };
+      const options = { remove: parsed.flags.remove === true, hooksOnly: parsed.flags['hooks-only'] === true };
       const done =
         target === 'claude' ? await setupClaude(root, options) : target === 'git' ? await setupGit(root, options) : undefined;
-      if (!done) throw new Error('Use: setup claude [--remove], or setup git [--remove].');
+      if (!done) throw new Error('Use: setup claude [--hooks-only] [--remove], or setup git [--remove].');
       for (const line of done) console.log(line);
       break;
     }
@@ -725,7 +743,7 @@ function printHelp(): void {
   console.log(`Agent Shared Memory\n\nUsage:\n  agent-memory <command> [options]\n\nCommands:\n  init [--name PROJECT] [--stale 60] [--recent 20]\n  register --agent AGENT-01 [--role Backend] [--task AUTH-184] [--force]\n  unregister --agent AGENT-01\n  status [--json]\n  memory\n  log [--limit 20] [--agent AGENT-01] [--json]\n  send --from AGENT-01 --to AGENT-02 --message "..." [--pointer "..."]\n  inbox --agent AGENT-02 [--all] [--peek] [--json]\n  heartbeat --agent AGENT-01\n  intent|reading|found|changed|created|testing|waiting|done|note\n      --agent AGENT-01 --message "..."\n      [--task TASK] [--pointer "file::symbol::parameter"]\n      [--reason "..."] [--for AGENT-02]\n  config [--name PROJECT] [--stale 60] [--recent 20] [--auto-compact 5000] [--max-depth 3]\n  compact [--keep 500] [--history] [--dry-run]\n\nWork queue:\n  task create --agent A --title "..." [--detail "..."] [--for B] [--pointer "..."]\n                [--review-by C]        queue a review that must accept the work
                 [--review]             same, but open to whoever is free (never the doer)
                 [--reviewers 3]        queue an open panel (1-9); majority decides\n                [--depends-on T1,T2]   stay out of the queue until all of them are DONE
-                [--priority 0-4]       0 is handed out first; reviews inherit it\n                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--all] [--json]   --all includes archived tasks\n  task ready [--agent A] [--json]   what can be claimed now, most urgent first\n  task show <id> [--json]           the task, its reviews and every event that names it\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\nFiles:\n  reserve --agent A <path|folder/|glob>... [--shared] [--ttl 30] [--reason "..."]\n                           all or nothing; other agents are refused while it holds\n  release --agent A [path...]      without paths, everything the agent holds\n  reservations [--json]\n\nCode by symbol:\n  symbols <file> [--json]          what a file declares, with line ranges\n  find <Name|Type.member> [--json] where a symbol is declared in the project\n  refs <Name> [--json]             where it is used\n  rename <Name> <NewName> [--apply] shows every line first; --apply writes it\n\nProject memory:\n  remember "fact" [--agent A]      a fact every session starts with\n  facts [--json]  |  forget <id>\n  prime [--agent A]                the start-of-session briefing\n\nEditors and git:\n  setup claude [--remove]          Claude Code hooks + MCP server for this project\n  setup git [--remove]             pre-commit guard for reserved files\n  hook claude <session-start|pre-write|post-write|session-end>   (run by the hooks)\n  hook pre-commit                                                 (run by git)\n\nSeveral machines:\n  hub [--port 4318] [--host 0.0.0.0] [--token T]   share this memory over the network\n  --remote URL --token T   (or AGENT_MEMORY_REMOTE, AGENT_MEMORY_TOKEN) use a hub from any command\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
+                [--priority 0-4]       0 is handed out first; reviews inherit it\n                [--json]               print the task, so a chain can capture its id\n  task list [--status OPEN] [--agent A] [--all] [--json]   --all includes archived tasks\n  task ready [--agent A] [--json]   what can be claimed now, most urgent first\n  task show <id> [--json]           the task, its reviews and every event that names it\n  task claim --agent A\n  task done|fail|cancel --id T-XXX [--message "..."]\n  schedule create --agent A --cron "0 9 * * 1-5" --title "..." [--for B]\n  schedule list [--json]\n  schedule remove --id S-XXX\n  run --agent A --exec "<command>" [--once] [--interval 3] [--timeout 900]\n  scheduler [--interval 30] [--once]\n\nFiles:\n  reserve --agent A <path|folder/|glob>... [--shared] [--ttl 30] [--reason "..."]\n                           all or nothing; other agents are refused while it holds\n  release --agent A [path...]      without paths, everything the agent holds\n  reservations [--json]\n\nCode by symbol:\n  symbols <file> [--json]          what a file declares, with line ranges\n  find <Name|Type.member> [--json] where a symbol is declared in the project\n  refs <Name> [--json]             where it is used\n  rename <Name> <NewName> [--apply] shows every line first; --apply writes it\n\nProject memory:\n  remember "fact" [--agent A]      a fact every session starts with\n  facts [--json]  |  forget <id>\n  prime [--agent A]                the start-of-session briefing\n\nEditors and git:\n  setup claude [--remove]          Claude Code hooks + MCP server for this project\n  setup claude --hooks-only        only the hooks, no MCP server process per session\n  setup git [--remove]             pre-commit guard for reserved files\n  hook claude <session-start|pre-write|post-write|pre-shell|post-shell|session-end>   (run by the hooks)\n  guard-log [--limit 30] [--json] what the shell guard blocked or let through, to learn from\n  hook pre-commit                                                 (run by git)\n\nSeveral machines:\n  hub [--port 4318] [--host 0.0.0.0] [--token T]   share this memory over the network\n  --remote URL --token T   (or AGENT_MEMORY_REMOTE, AGENT_MEMORY_TOKEN) use a hub from any command\n\n  watch [--interval 3] [--once] [--id GIT-WATCHER] [--dry-run]\n  serve [--port 4317]\n  mcp [--agent AGENT-01]   MCP server over stdio (Claude Code, Codex, Cursor...)\n                           --agent fixes the identity and drops it from every tool\n\nGlobal:\n  --root PATH   Project root (defaults to current directory)\n\nPointer examples:\n  src/Auth/TokenService.cs::TokenService.ValidateRefreshToken(string refreshToken)\n  src/Orders/OrderService.cs::OrderService.CancelAsync(Guid orderId)::orderId\n`);
 }
 
 main().catch(error => {
