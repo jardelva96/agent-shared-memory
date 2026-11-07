@@ -235,6 +235,7 @@ test('setup claude --hooks-only writes the shell hooks and no MCP server', async
       'Write|Edit|MultiEdit|NotebookEdit -> agent-memory hook claude post-write',
       'Bash|PowerShell -> agent-memory hook claude post-shell'
     ]);
+    assert.ok(settings.hooks.PreToolUse.every((g: any) => g.hooks[0].timeout === 15), 'a stuck hook gives up in 15 s');
     await assert.rejects(readFile(path.join(root, '.mcp.json'), 'utf8'));
     await setupClaude(root, { command: 'agent-memory', remove: true });
     const after = JSON.parse(await readFile(path.join(root, '.claude', 'settings.json'), 'utf8'));

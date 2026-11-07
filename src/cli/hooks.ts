@@ -266,6 +266,7 @@ export async function runGitPreCommit(root: string, env: NodeJS.ProcessEnv = pro
 }
 
 const HOOK_MARK = ' hook claude ';
+const HOOK_TIMEOUT_SECONDS = 15;
 
 /** How to call this CLI from a hook: the script that is running now, through node. */
 export function selfCommand(): string {
@@ -296,7 +297,8 @@ export async function setupClaude(root: string, options: { remove?: boolean; com
       .filter(g => g.hooks.length > 0);
     if (!options.remove) {
       for (const spec of wanted.filter(w => w.hookEvent === hookEvent)) {
-        others.push({ matcher: spec.matcher, hooks: [{ type: 'command', command: `${command}${HOOK_MARK}${spec.event}` }] });
+        // A memory stuck on a lock must not hold the editor for the default minute on every tool call.
+        others.push({ matcher: spec.matcher, hooks: [{ type: 'command', command: `${command}${HOOK_MARK}${spec.event}`, timeout: HOOK_TIMEOUT_SECONDS }] });
       }
     }
     if (others.length) settings.hooks[hookEvent] = others;
