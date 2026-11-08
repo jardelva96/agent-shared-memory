@@ -223,3 +223,10 @@ test('a task shows its whole story: claim, rejection, the redo and the verdicts'
     assert.match(said, /review rejected/i);
   });
 });
+
+test('an unknown hook event fails loudly instead of doing nothing', async () => {
+  // Claude Code's own names (PreToolUse) are the likely slip in a hand-written setup or check.
+  const out = await runClaudeHook('PreToolUse', JSON.stringify({ session_id: 'x', cwd: os.tmpdir() }), {});
+  assert.equal(out.exitCode, 1, 'exit 1 reports the error; 2 would block the editor');
+  assert.match(String(out.stderr), /unknown hook event "PreToolUse"\. Use one of: session-start, .*pre-shell/);
+});

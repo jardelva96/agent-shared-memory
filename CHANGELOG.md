@@ -38,6 +38,13 @@ other session's edits went through the shell.
   commands and its last edit) and when it was last seen, so a new session can tell whether it is
   about to work in the same repository.
 
+### Mistakes that looked like success
+
+- `hook claude <event>` with an unknown event exits 1 and lists the valid names, instead of doing
+  nothing and exiting 0.
+- `task done|fail|cancel` on a task that already ended is refused with its verdict, instead of
+  printing "is now FAILED" as if the command had changed it.
+
 ## 1.4.0
 
 Measured with `bench/desempenho.mjs` (no model involved) on Windows, Node 24.

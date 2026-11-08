@@ -44,6 +44,7 @@ export function sessionAgent(env: NodeJS.ProcessEnv, sessionId?: string): string
 
 const WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
 const SHELL_TOOLS = /^(Bash|PowerShell)$/;
+const HOOK_EVENTS = ['session-start', 'pre-write', 'post-write', 'pre-shell', 'post-shell', 'session-end'];
 
 /** Another session counts as still in a checkout if it was seen there this recently. */
 const STILL_THERE_MS = 10 * 60_000;
@@ -158,6 +159,10 @@ async function noteShellWrites(service: AgentMemoryService, root: string, agentI
 }
 
 export async function runClaudeHook(event: string, input: string, env: NodeJS.ProcessEnv = process.env): Promise<HookOutcome> {
+  // A misspelled event would do nothing and exit 0, so a broken hook setup looked like a working one.
+  if (!HOOK_EVENTS.includes(event)) {
+    return { exitCode: 1, stderr: `agent-memory: unknown hook event "${event}". Use one of: ${HOOK_EVENTS.join(', ')}.` };
+  }
   let payload: Record<string, any> = {};
   try {
     payload = input.trim() ? JSON.parse(input) : {};

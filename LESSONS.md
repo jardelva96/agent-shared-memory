@@ -26,6 +26,34 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-08: a hook check with the wrong event name passed every time
+
+What happened: a manual smoke test called `hook claude PreToolUse` (Claude Code's own event name)
+instead of `hook claude pre-shell`. Every call exited 0 and did nothing, so the check reported
+"not blocked" for a command the guard does block.
+
+Why: an unknown event fell through every branch and returned exit 0, like a correct call that had
+nothing to do.
+
+Fix (1.5.0): an unknown event exits 1 (an error the editor shows, never 2, which would block it)
+and lists the valid names.
+
+Test: `tests/coordination.test.ts`, "an unknown hook event fails loudly instead of doing nothing".
+
+## 2026-11-08: `task done` on a failed task said "is now FAILED"
+
+What happened: a worker ran out of budget right after finishing good work, so its task ended
+FAILED. The manager checked the work and ran `task done`; the CLI answered "T-... is now FAILED",
+which reads as if the command had made it fail.
+
+Why: a recorded verdict is final by design (a late exit code must not change it), so the call
+returned the unchanged task, and the CLI printed its status as if it were new.
+
+Fix (1.5.0): `task done|fail|cancel` on a finished task is refused with the verdict it already has
+and what to do instead (a new task that says "Same as T-...").
+
+Test: `tests/cli-json.test.ts`, "task done on a task that already failed is refused".
+
 ## 2026-11-08: the panel listed 28 sessions and 27 were long gone
 
 What happened: in a real workspace, `agent-memory status` listed 28 sessions; 27 had been OFFLINE

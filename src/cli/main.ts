@@ -302,11 +302,16 @@ async function main(): Promise<void> {
       }
       if (sub === 'done' || sub === 'fail' || sub === 'cancel') {
         const status = sub === 'done' ? 'DONE' : sub === 'fail' ? 'FAILED' : 'CANCELLED';
-        const task = await service.finishTask(
-          required(stringFlag(parsed.flags, 'id') ?? parsed.positionals[1], '--id'),
-          status,
-          stringFlag(parsed.flags, 'message')
-        );
+        const id = required(stringFlag(parsed.flags, 'id') ?? parsed.positionals[1], '--id');
+        // A finished task keeps its verdict; saying "is now FAILED" after `done` read as if it had changed.
+        const before = (await service.taskHistory(id)).task;
+        if (['DONE', 'FAILED', 'CANCELLED'].includes(before.status)) {
+          throw new Error(
+            `${id} already ended as ${before.status}; a finished task never changes. ` +
+              `To redo or accept the work, create a new task that says "Same as ${id}".`
+          );
+        }
+        const task = await service.finishTask(id, status, stringFlag(parsed.flags, 'message'));
         console.log(`${task.id} is now ${task.status}`);
         break;
       }

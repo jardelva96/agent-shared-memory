@@ -62,3 +62,21 @@ test('task create rejects invalid reviewer panel sizes without writing a task', 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('task done on a task that already failed is refused, and says what to do instead', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-cli-'));
+  try {
+    await cli(root, ['init', '--name', 'Verdict']);
+    await cli(root, ['register', '--agent', 'LEAD']);
+    const id = JSON.parse((await cli(root, ['task', 'create', '--agent', 'LEAD', '--title', 'x', '--json'])).stdout).id;
+    assert.equal((await cli(root, ['task', 'fail', '--id', id])).code, 0);
+
+    // Real use, 2026-11-08: this printed "is now FAILED", which read as if done had changed it.
+    const done = await cli(root, ['task', 'done', '--id', id]);
+    assert.notEqual(done.code, 0);
+    assert.match(done.stderr, new RegExp(`${id} already ended as FAILED; a finished task never changes.*Same as ${id}`));
+    assert.doesNotMatch(done.stdout, /is now/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
