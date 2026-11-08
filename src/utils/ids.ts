@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+/** The global Web Crypto, so a hook call that makes no id never loads node:crypto. */
+const randomUUID = (): string => globalThis.crypto.randomUUID();
 
 export function createId(prefix: string): string {
   return `${prefix}-${randomUUID()}`;
