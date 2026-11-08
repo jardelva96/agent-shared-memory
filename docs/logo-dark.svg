@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-30 -10 344 344" role="img" aria-label="Agent Shared Memory">
+  <title>Agent Shared Memory</title>
+  <g transform="matrix(1 -0.5 0 1 0 97)">
+    <path fill="#f4f4f2" d="M0 18Q0 0 18 0H176Q194 0 194 18V60Q194 78 176 78H79Q70 78 70 87V122Q70 140 52 140H18Q0 140 0 122Z"/>
+    <path fill="#f4f4f2" d="M0 18Q0 0 18 0H176Q194 0 194 18V60Q194 78 176 78H79Q70 78 70 87V122Q70 140 52 140H18Q0 140 0 122Z" transform="rotate(180 142 136)"/>
+    <rect x="90" y="96" width="104" height="80" rx="11" fill="#636fda"/>
+  </g>
+</svg>

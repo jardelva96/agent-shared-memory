@@ -1,24 +1,159 @@
-<img src="docs/logo.svg" alt="Agent Shared Memory logo" width="96">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img src="docs/logo.svg" alt="Agent Shared Memory logo" width="132">
+  </picture>
+</p>
 
-# Agent Shared Memory
+<h1 align="center">Agent Shared Memory</h1>
 
-[Português](README.pt-BR.md)
+<p align="center">
+  <strong>One shared memory for a team of coding agents.</strong><br>
+  Several agents in one repository see who is working where, reserve files, stop each other from
+  overwriting work, and read code by symbol instead of whole files.
+</p>
 
-**New in 1.5.0:** a guard for git commands between sessions, a start briefing that shows where
-each session works, and automatic cleanup of closed sessions. See the [changelog](CHANGELOG.md).
+<p align="center">
+  <img alt="Version 1.5.0" src="https://img.shields.io/badge/version-1.5.0-636fda">
+  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-121214">
+  <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/node-%E2%89%A520-121214">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-121214">
+  <img alt="Zero runtime dependencies" src="https://img.shields.io/badge/runtime%20dependencies-0-121214">
+</p>
 
-Local-first operational memory for multiple AI coding agents working in the same repository.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#measured-results">Results</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="README.pt-BR.md">Português</a>
+</p>
 
-**Agent Shared Memory** coordinates agents such as Codex, Claude Code, Cursor, Ollama-based
-runners, or any CLI/API-driven worker. It creates a `.agents/` directory inside the target project
-and keeps agent state, declared intent, history, messages, durable tasks, schedules, reviews and a
-live dashboard in plain local files.
+---
 
-The workflow is intentionally simple: before a meaningful change, an agent announces **what it will
-do**, **where it will work** and **why**. While work is happening, every agent can see the current
-state of the others. After a change, the agent records the result in its own append-only history.
+## Why
 
-## What it does that other tools do not
+When several AI coding agents work in the same codebase, Git conflicts are the small problem. The
+bigger one is that no agent knows what the others are doing: which file another one is about to
+change, what already changed, who is waiting for whom, whether a task is still open, or whether a
+review really happened. The usual result is two agents rewriting the same file, or one switching the
+branch under the other.
+
+Agent Shared Memory is a small coordination layer that lives next to your code, in plain files
+under `.agents/`. No server, no database, no account: every agent, whatever its vendor, reads and
+writes the same memory.
+
+## Features
+
+| | |
+|---|---|
+| **Shared, live memory** | Every agent declares what it will change, and why, before it starts. All of them see the current state of the others: in the terminal, over MCP, or on a live dashboard. |
+| **File reservations** | Claim files, folders or globs for a while, exclusive or shared. Writes from other agents are refused before they happen, in the editor hooks and at commit. |
+| **Shell guard** *(new in 1.5.0)* | A `git checkout`, `stash`, `reset`, `pull` or `add -A` in a folder where another session has unsaved work is stopped, with the files and the session named. |
+| **Code by symbol** | Read, find, edit and rename one function or class by name (`file::Type.member`), without a language server. Fewer tokens, and two agents can change two functions of one file safely. |
+| **Work queue and reviews** | Durable tasks with priorities, dependencies, retries and review gates; work is never reviewed by the agent that did it. A runner executes any CLI agent or script, one task at a time. |
+| **Any agent, any machine** | One command sets up Claude Code (hooks and MCP). Codex, Cursor, Ollama-based runners and scripts use MCP or the CLI. A hub shares one memory between machines. |
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Claude Code"] -->|hooks + MCP| M
+    B["Codex · Cursor"] -->|MCP| M
+    C["Scripts · local models"] -->|CLI + runner| M
+    M[(".agents/<br/>shared memory")]
+    M --> S["who works where<br/>intent · state"]
+    M --> R["reserved files<br/>shell guard"]
+    M --> Q["tasks · reviews<br/>messages"]
+```
+
+Every agent follows one loop:
+
+1. **Read** the shared memory: who is active and where, which files are reserved, what is ready to do.
+2. **Declare intent** with a pointer such as `src/auth/token.ts::TokenService.refresh`, before editing.
+3. **Code.** Overlaps are reported at once; reserved files and risky git commands are refused.
+4. **Record the result** (`CHANGED`, `TESTING`, `DONE`), which the other agents see right away.
+
+With Claude Code the loop runs by itself: `setup claude` installs hooks that brief each session when
+it starts and check every edit and shell command.
+
+## Quick start
+
+Requirements: Node.js 20 or newer, and Git.
+
+```bash
+git clone https://github.com/jardelva96/agent-shared-memory.git
+cd agent-shared-memory
+npm install
+npm run build
+npm link            # makes the agent-memory command available
+```
+
+In the project the agents will share:
+
+```bash
+cd /path/to/your/project
+agent-memory init --name "My Project"
+agent-memory setup claude    # Claude Code: hooks and MCP server in one step
+agent-memory serve           # live dashboard at http://127.0.0.1:4317
+```
+
+Any other agent registers with its own id and declares what it is about to do:
+
+```bash
+agent-memory register --agent AGENT-02 --role Frontend --task UI-210
+agent-memory intent --agent AGENT-02 --task UI-210 \
+  --pointer "src/app/page.tsx::HomePage" \
+  --message "Update the empty state on the home page"
+agent-memory status
+```
+
+Without `npm link`, run any command with `npm run dev -- <command>`.
+
+## Measured results
+
+Every number comes from the `bench/` folder and can be run again:
+
+| What | Result |
+|---|---|
+| Two agents changing two functions of one file at once (8 races, free models) | whole-file writes erased the other's work 3 of 7 times; by symbol, 0 of 8, with 96% of hidden tests passing against 73%, and 46% fewer tokens |
+| Reading by pointer instead of whole files (213 runs, 10 models) | same answers right, 66% fewer tokens |
+| Finding code when only the name is known: text search against the symbol tools (40 runs) | same answers right, 75% fewer tokens with the symbol tools |
+| Pointer returns exactly the declaration asked for (9,400 declarations, against the compilers) | C# 99.4%, TypeScript 99.3%, Python 98.8% |
+| File outline against the compilers | finds 98.5% to 99.96% of declarations; 99.6% to 100% of what it lists is real |
+| Queue with four agents from two providers | no task claimed twice, no self-review, no dependency skipped, in 40 audited runs |
+| One write to the memory, with 8,000 events in the journal | 13 ms |
+| Claiming a task with 3,000 tasks on disk | 27 ms |
+| Finding a symbol across 609 files (8.7 MB) | 0.15 s |
+| 40 agent processes writing at once | about 120 writes/s, no event lost, no file corrupted, panel up to date |
+
+## Documentation
+
+[Feature details](#feature-details) ·
+[Project layout](#project-layout) ·
+[Principles](#principles) ·
+[Initialize another project](#initialize-another-project) ·
+[Register agents](#register-agents) ·
+[Recommended workflow](#recommended-workflow) ·
+[Agent lifecycle](#agent-lifecycle) ·
+[Event journal](#event-journal) ·
+[Compaction](#compaction) ·
+[Waiting and messages](#waiting-and-messages) ·
+[Heartbeat](#heartbeat) ·
+[Shell guard](#shell-guard) ·
+[Conflict detection](#conflict-detection) ·
+[Work queue, runner and scheduling](#work-queue-runner-and-scheduling) ·
+[Git watcher](#git-watcher) ·
+[Local dashboard](#local-dashboard) ·
+[MCP server](#mcp-server) ·
+[Pointer format](#pointer-format) ·
+[Prompt protocol](#prompt-protocol) ·
+[Commands](#commands) ·
+[Concurrency](#concurrency) ·
+[Tests](#tests)
+
+## Feature Details
 
 - **One command for Claude Code.** `agent-memory setup claude` installs hooks and the MCP
   server: every session starts with a briefing (`prime`), a write to a file another agent
@@ -43,57 +178,9 @@ state of the others. After a change, the agent records the result in its own app
   `task ready`, `task show` (the whole story of a task) and reviews that never go to the agent
   that did the work, decided by majority when you ask for a panel.
 
-### Measured results
+## Project Layout
 
-Every number comes from `bench/` and can be run again (details in [CHANGELOG.md](CHANGELOG.md)):
-
-| What | Result |
-|---|---|
-| Two agents changing two functions of one file at once (8 races, free models) | whole-file writes erased the other's work 3 of 7 times; by symbol, 0 of 8, with 96% of hidden tests passing against 73%, and 46% fewer tokens |
-| Reading by pointer instead of whole files (213 runs, 10 models) | same answers right, 66% fewer tokens |
-| Finding code when only the name is known: text search against the symbol tools (40 runs) | same answers right, 75% fewer tokens with the symbol tools |
-| Pointer returns exactly the declaration asked for (9,400 declarations, against the compilers) | C# 99.4%, TypeScript 99.3%, Python 98.8% |
-| File outline against the compilers | finds 98.5% to 99.96% of declarations; 99.6% to 100% of what it lists is real |
-| Queue with four agents from two providers | no task claimed twice, no self-review, no dependency skipped, in 40 audited runs |
-| One write to the memory, with 8,000 events in the journal | 13 ms |
-| Claiming a task with 3,000 tasks on disk | 27 ms |
-| Finding a symbol across 609 files (8.7 MB) | 0.15 s |
-| 40 agent processes writing at once | about 120 writes/s, no event lost, no file corrupted, panel up to date |
-
-
-## Why It Exists
-
-When several agents work in the same codebase, Git conflicts are only part of the problem. The real
-issue is operational awareness: one agent does not know what another agent read, which file it plans
-to touch, what already changed, who is blocked, which task is still open, or whether a review really
-happened.
-
-Agent Shared Memory solves that with a small, local and auditable coordination layer:
-
-- **shared memory** generated automatically at `.agents/SHARED_MEMORY.md`;
-- **per-agent state** in JSON and append-only Markdown history;
-- **overlap detection** using semantic pointers such as `file::Class.method()`;
-- **direct messages** and explicit wait/dependency signals between agents;
-- **durable task queue** with claim, retry, dead-letter, dependencies and synthesis tasks;
-- **review gates**, including open review panels with `--reviewers N` and majority decisions;
-- **local runner** for CLI agents, local model APIs or custom scripts;
-- **MCP server** so compatible clients can use memory as native tools;
-- **Git watcher** that compares real working-tree changes with declared intent;
-- **live dashboard** over SSE for agents, conflicts, inbox counts and recent activity;
-- **file reservations** enforced where writes happen (Claude Code hooks, git pre-commit);
-- **symbol tools** to list, find, edit and rename code by name, with a syntax check before writing;
-- **a hub** that shares one memory between machines.
-
-## Project Status
-
-- Language: TypeScript, Node.js 20+.
-- Package: `agent-shared-memory`.
-- Binary: `agent-memory`.
-- Current version: `1.4.0`.
-- Tests: `npm test`.
-- Build: `npm run build`.
-
-## Generated Project Layout
+`agent-memory init` creates this folder in the project:
 
 ```text
 .agents/
@@ -130,60 +217,7 @@ Agent Shared Memory solves that with a small, local and auditable coordination l
 4. Pointers use file + symbol + optional parameter instead of fragile line numbers.
 5. Each agent owns a separate history.
 6. The central memory file is generated and should not be edited manually.
-7. Conflicts are surfaced as warnings, not blocked by force.
-
-## Requirements
-
-- Node.js 20+
-- npm
-
-## Start In 2 Minutes
-
-```bash
-npm install
-npm run build
-npm link
-
-cd /path/to/project
-agent-memory init --name "My Project"
-agent-memory register --agent AGENT-01 --role Backend --task AUTH-184
-agent-memory status
-agent-memory serve
-
-# With Claude Code: hooks and the MCP server in one step
-agent-memory setup claude
-```
-
-Open the local dashboard:
-
-```text
-http://127.0.0.1:4317
-```
-
-In another terminal or another agent, use a different id pointing at the same project root:
-
-```bash
-agent-memory register --agent AGENT-02 --role Frontend --task UI-210
-agent-memory intent --agent AGENT-02 --task UI-210 \
-  --pointer "src/app/page.tsx::HomePage" \
-  --message "Update the empty state on the home page"
-```
-
-## Installation
-
-```bash
-npm install
-npm run build
-npm link
-```
-
-The `agent-memory` command is now available locally.
-
-Without `npm link`, run it through the development script:
-
-```bash
-npm run dev -- help
-```
+7. Overlapping intent is a warning, not a lock; only reserved files and the shell guard refuse a change.
 
 ## Initialize Another Project
 
@@ -377,8 +411,8 @@ Sessions seen in app: CC-9B000001 (shell, 2 min ago: cd && dotnet).
 ```
 
 When the changes are yours, end the command with `# asm-ok: <why>`; it goes through and the reason
-is kept. `agent-memory guard-log` lists every block and every asm-ok, which is how
-[LESSONS.md](LESSONS.md) learns where the guard was wrong. `guardMinutes` in `.agents/config.json`
+is kept. `agent-memory guard-log` lists every block and every asm-ok, and whether each asm-ok was
+needed, which helps tune the guard for a team. `guardMinutes` in `.agents/config.json`
 sets the window (default 30; 0 turns the guard off), and `primeRules` replaces the default rules of
 the session briefing. `setup claude --hooks-only` skips the MCP server.
 
@@ -464,8 +498,12 @@ The agent claiming the synthesis receives the results of the completed parts alo
 
 ```bash
 agent-memory run --agent AGENT-03 --exec "my-script.sh" --once
+agent-memory run --agent AGENT-03 --exec "my-script.sh" --once --max-tasks 1
 agent-memory run --agent AGENT-03 --exec "claude -p \"$AGENT_TASK_DETAIL\""
 ```
+
+`--once` runs every ready task, then exits; `--max-tasks N` stops after N tasks. Without `--once`
+the runner keeps waiting for new work.
 
 Task content never enters the command string. Title, detail and pointer arrive through environment
 variables:
@@ -660,6 +698,7 @@ With MCP, this is optional because the server returns the protocol during `initi
 init        Initialize .agents/
 register    Register an agent and open its history (--force starts a new session)
 unregister  Remove an agent from the panel while preserving history
+forget-idle Forget sessions silent for longer than forgetOfflineAfterHours
 status      Show a compact agent status table
 memory      Print SHARED_MEMORY.md
 log         List recent journal events
@@ -692,6 +731,7 @@ find        Find where a symbol is declared
 refs        Find where a symbol is used
 rename      Rename a symbol across the project (--apply to write)
 setup       Install Claude Code hooks and MCP (setup claude) or the git guard (setup git)
+guard-log   List what the shell guard blocked or let through
 hook        Entry point the hooks call
 hub         Share this memory with other machines over HTTP
 ```
@@ -740,4 +780,4 @@ dependency.
 
 ## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).

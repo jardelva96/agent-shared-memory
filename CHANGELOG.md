@@ -4,6 +4,12 @@
 
 ![Agent Shared Memory 1.5.0](docs/release-1.5.0-en.png)
 
+### A new look
+
+- New logo: two agents holding one shared memory (`docs/logo.svg`, `docs/logo-dark.svg` for dark
+  backgrounds, `docs/logo-icon.svg` as an app icon).
+- A rewritten README that starts with what the project is for, how it works and a quick start.
+
 ### The shell guard
 
 Two sessions in the same checkout: one switched the branch while the other had uncommitted work

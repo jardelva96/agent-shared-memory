@@ -1,6 +1,11 @@
-<img src="docs/logo.svg" alt="Logo do Agent Shared Memory" width="96">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img src="docs/logo.svg" alt="Logo do Agent Shared Memory" width="132">
+  </picture>
+</p>
 
-# Agent Shared Memory
+<h1 align="center">Agent Shared Memory</h1>
 
 [English](README.md)
 
