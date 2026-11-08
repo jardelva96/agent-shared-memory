@@ -142,16 +142,35 @@ test('a dependency archived as DONE unblocks the task waiting on it', async () =
   });
 });
 
+/** Ten writes, timed. */
+async function tenWrites(service: AgentMemoryService): Promise<number> {
+  const start = performance.now();
+  for (let i = 0; i < 10; i++) {
+    await service.activity({ agentId: 'A', type: 'NOTE', description: `n${i}`, pointer: parsePointer(`src/a${i}.ts::f`) });
+  }
+  return performance.now() - start;
+}
+
 test('a write does not wait for files that were never created', async () => {
   // Reservations, facts and read cursors are absent in a fresh project. Waiting for them to
-  // reappear made every write take about 200 ms.
+  // reappear made every write take about 200 ms. A fixed limit on wall time failed on a busy
+  // machine (2026-11-08), so the fresh project is compared with one where those files exist,
+  // timed in the same run: a wait costs at least 1.5 s over ten writes, load slows both alike.
+  let fresh = 0;
+  let existing = 0;
   await withService({}, async service => {
     await service.register('A');
-    const start = performance.now();
-    for (let i = 0; i < 10; i++) {
-      await service.activity({ agentId: 'A', type: 'NOTE', description: `n${i}`, pointer: parsePointer(`src/a${i}.ts::f`) });
-    }
-    const elapsed = performance.now() - start;
-    assert.ok(elapsed < 1000, `10 writes took ${Math.round(elapsed)} ms`);
+    fresh = await tenWrites(service);
   });
+  await withService({}, async service => {
+    await service.register('A');
+    await service.register('B');
+    await service.reserve('A', ['tmp/x']);
+    await service.release('A');
+    await service.forget((await service.remember('x', 'A')).id);
+    await service.sendMessage({ from: 'B', to: 'A', body: 'x' });
+    await service.readInbox('A');
+    existing = await tenWrites(service);
+  });
+  assert.ok(fresh < existing + 750, `10 writes took ${Math.round(fresh)} ms fresh and ${Math.round(existing)} ms with the files present`);
 });

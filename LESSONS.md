@@ -26,6 +26,19 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-08: a speed test failed because the machine was busy
+
+What happened: "a write does not wait for files that were never created" (10 writes under 1 s)
+failed in 2 of 3 full runs while three other agents ran builds and tests (RAM at 83%): 1.3 s.
+Alone it took 0.25 s. A test that fails without a bug teaches people to ignore red.
+
+Why: it compared wall time with a fixed limit, and load slows every write.
+
+Fix: the fresh project is compared with one where those files exist, timed in the same run; the
+wait it guards against costs at least 1.5 s over ten writes, while load slows both projects alike.
+
+Test: the same test; with the 150 ms wait put back it fails (4.5 s).
+
 ## 2026-11-08: a hook check with the wrong event name passed every time
 
 What happened: a manual smoke test called `hook claude PreToolUse` (Claude Code's own event name)
