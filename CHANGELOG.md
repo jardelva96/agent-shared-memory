@@ -34,6 +34,9 @@ other session's edits went through the shell.
 - A session silent for longer than `forgetOfflineAfterHours` (default 24; 0 keeps them all) that
   holds no claimed task and no reservation is forgotten when a session starts, at most once an
   hour. Its history and journal stay. `agent-memory forget-idle` runs the sweep now.
+- The session briefing says where each active session works (up to three folders from its recent
+  commands and its last edit) and when it was last seen, so a new session can tell whether it is
+  about to work in the same repository.
 
 ## 1.4.0
 

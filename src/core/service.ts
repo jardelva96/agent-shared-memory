@@ -18,6 +18,26 @@ import { MemoryStore } from './store.js';
 
 const HOUR_MS = 3_600_000;
 
+/** The folders a session worked in since `since`, newest first, from its shell places and its last edit. */
+function whereWorking(state: AgentState, since: number): string {
+  const seen = new Map<string, number>();
+  const add = (folder: string | undefined, at: string | undefined) => {
+    const ms = at ? Date.parse(at) : NaN;
+    if (!folder || !Number.isFinite(ms) || ms < since) return;
+    seen.set(folder, Math.max(ms, seen.get(folder) ?? 0));
+  };
+  for (const [place, at] of Object.entries(state.places ?? {})) add(place === '.' ? 'the project root' : place, at);
+  const edited = state.current?.pointer?.file;
+  if (edited) add(edited.includes('/') ? edited.split('/')[0] : 'the project root', state.updatedAt);
+  const folders = [...seen].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([folder]) => folder);
+  return folders.length ? `in ${folders.join(', ')}` : 'no files touched yet';
+}
+
+function minutesAgo(iso: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+  return minutes < 1 ? 'just now' : `${minutes} min ago`;
+}
+
 export interface ActivityInput {
   agentId: string;
   type: ActivityType;
@@ -373,7 +393,12 @@ export class AgentMemoryService {
     if (facts.length) lines.push('Project facts:', ...facts.map(f => `- ${f.text}`), '');
     const others = states.filter(s => s.id !== agentId && effectiveStatus(s, config) !== 'OFFLINE');
     if (others.length) {
-      lines.push('Agents active now:', ...others.map(s => `- ${s.id}: ${s.current?.description ?? '-'}${s.current?.pointer ? ` (${formatPointer(s.current.pointer)})` : ''}`), '');
+      const since = Date.now() - (config.guardMinutes || 30) * 60_000;
+      lines.push(
+        'Agents active now:',
+        ...others.map(s => `- ${s.id}: ${s.current?.description ?? '-'}${s.current?.pointer ? ` (${formatPointer(s.current.pointer)})` : ''}; ${whereWorking(s, since)}; last activity ${minutesAgo(s.lastHeartbeatAt)}`),
+        ''
+      );
     }
     if (reservations.length) {
       lines.push('Reserved files:', ...reservations.map(r => `- ${r.pattern}: ${r.agentId}, ${r.exclusive ? 'exclusive' : 'shared'} until ${localTime(r.expiresAt)}`), '');
