@@ -57,16 +57,12 @@ writes the same memory.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["Claude Code"] -->|hooks + MCP| M
-    B["Codex · Cursor"] -->|MCP| M
-    C["Scripts · local models"] -->|CLI + runner| M
-    M[(".agents/<br/>shared memory")]
-    M --> S["who works where<br/>intent · state"]
-    M --> R["reserved files<br/>shell guard"]
-    M --> Q["tasks · reviews<br/>messages"]
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/how-it-works-dark.svg">
+    <img src="docs/how-it-works.svg" width="880" alt="Claude Code, Codex, Cursor, scripts and local models all read and write one shared memory in .agents/: who works where, reserved files and the shell guard, tasks, reviews and messages.">
+  </picture>
+</p>
 
 Every agent follows one loop:
 

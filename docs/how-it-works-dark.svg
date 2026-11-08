@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" role="img" aria-label="Agents read and write one shared memory">
+  <title>Claude Code, Codex, Cursor, scripts and local models share one memory in .agents/: who works where, reserved files and the shell guard, tasks, reviews and messages.</title>
+  <defs>
+    <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#6e7681"/>
+    </marker>
+  </defs>
+  <rect x="0.75" y="22.75" width="230.5" height="62.5" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="116" y="50" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#e6edf3">Claude Code</text>
+  <text x="116" y="70" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#9198a1">hooks + MCP</text>
+  <rect x="0.75" y="118.75" width="230.5" height="62.5" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="116" y="146" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#e6edf3">Codex · Cursor</text>
+  <text x="116" y="166" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#9198a1">MCP</text>
+  <rect x="0.75" y="214.75" width="230.5" height="62.5" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="116" y="242" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#e6edf3">Scripts · local models</text>
+  <text x="116" y="262" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#9198a1">CLI + runner</text>
+  <rect x="648.75" y="22.75" width="230.5" height="62.5" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="764" y="50" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#e6edf3">Who works where</text>
+  <text x="764" y="70" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#9198a1">intent · state</text>
+  <rect x="648.75" y="118.75" width="230.5" height="62.5" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="764" y="146" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#e6edf3">Reserved files</text>
+  <text x="764" y="166" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#9198a1">shell guard</text>
+  <rect x="648.75" y="214.75" width="230.5" height="62.5" rx="14" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="764" y="242" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#e6edf3">Tasks and reviews</text>
+  <text x="764" y="262" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#9198a1">messages · queue</text>
+  <path d="M236 54 C277 54 277 122 318 122" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#tip)"/>
+  <path d="M236 150 C277 150 277 150 318 150" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#tip)"/>
+  <path d="M236 246 C277 246 277 178 318 178" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#tip)"/>
+  <path d="M560 122 C601 122 601 54 642 54" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#tip)"/>
+  <path d="M560 150 C601 150 601 150 642 150" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#tip)"/>
+  <path d="M560 178 C601 178 601 246 642 246" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#tip)"/>
+  <rect x="324" y="78" width="232" height="144" rx="20" fill="#636fda"/>
+  <text x="440" y="128" text-anchor="middle" font-family="'Cascadia Code', SFMono-Regular, Consolas, Menlo, monospace" font-size="15" fill="#e4e7ff">.agents/</text>
+  <text x="440" y="158" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#ffffff">Shared memory</text>
+  <text x="440" y="184" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="13.5" fill="#e4e7ff">plain local files</text>
+</svg>
