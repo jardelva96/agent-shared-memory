@@ -26,6 +26,20 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-08: `run --once` meant for one task ran the whole queue
+
+What happened: `run --agent MAGNET --once` was started to run one task. It ran all three ready
+tasks one after another, and the second and third started on top of the first one's unreviewed
+changes in the same checkout.
+
+Why: `--once` meant "one sweep of the queue", and it silently dropped `--max-tasks`, so there was
+no way to ask for a single task. The help named the flag without saying what it does.
+
+Fix (1.5.0): `--once --max-tasks N` stops after N tasks; the help says `--once` runs every ready
+task, then exits.
+
+Test: `tests/cli-json.test.ts`, "run --once --max-tasks 1 runs exactly one task".
+
 ## 2026-11-08: a speed test failed because the machine was busy
 
 What happened: "a write does not wait for files that were never created" (10 writes under 1 s)

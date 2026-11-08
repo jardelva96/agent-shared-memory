@@ -80,3 +80,21 @@ test('task done on a task that already failed is refused, and says what to do in
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('run --once --max-tasks 1 runs exactly one task, and --once alone runs every ready one', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-cli-'));
+  try {
+    await cli(root, ['init', '--name', 'Once']);
+    await cli(root, ['register', '--agent', 'LEAD']);
+    await cli(root, ['register', '--agent', 'W']);
+    for (const title of ['a', 'b', 'c']) await cli(root, ['task', 'create', '--agent', 'LEAD', '--title', title]);
+
+    // Real use, 2026-11-08: --once dropped --max-tasks, and a run meant for one task ran three.
+    const one = await cli(root, ['run', '--agent', 'W', '--exec', 'node -e 0', '--once', '--max-tasks', '1']);
+    assert.match(one.stdout, /^1 task\(s\) executed\.$/m, one.stdout + one.stderr);
+    const rest = await cli(root, ['run', '--agent', 'W', '--exec', 'node -e 0', '--once']);
+    assert.match(rest.stdout, /^2 task\(s\) executed\.$/m, rest.stdout + rest.stderr);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -10,6 +10,8 @@ export interface RunnerOptions {
   intervalMs?: number;
   /** Stop after this many tasks; 0 means run until interrupted. */
   maxTasks?: number;
+  /** Return as soon as no task is ready instead of waiting for one (also the case when maxTasks is unset). */
+  once?: boolean;
   timeoutMs?: number;
   /** Stop once the accumulated cost passes this, so a cascade cannot drain a session. */
   maxCostUsd?: number;
@@ -115,7 +117,7 @@ export async function runQueue(
     const task = await service.claimTask(options.agentId);
 
     if (!task) {
-      if (options.maxTasks === undefined) return outcomes; // single sweep
+      if (options.once || options.maxTasks === undefined) return outcomes; // single sweep
       await new Promise(resolve => setTimeout(resolve, interval));
       continue;
     }

@@ -44,6 +44,8 @@ other session's edits went through the shell.
   nothing and exiting 0.
 - `task done|fail|cancel` on a task that already ended is refused with its verdict, instead of
   printing "is now FAILED" as if the command had changed it.
+- `run --once --max-tasks N` stops after N tasks; `--once` used to drop `--max-tasks` and run the
+  whole queue. The help now says that `--once` runs every ready task, then exits.
 
 ## 1.4.0
 
