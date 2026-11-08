@@ -4,9 +4,8 @@
 
 [English](README.md)
 
-**Novo na 1.5.0:** uma trava do terminal que impede comandos git de mexer numa pasta onde outra
-sessão está trabalhando, e sete correções achadas no uso real, cada uma com teste. Veja o
-[changelog](CHANGELOG.md).
+**Novo na 1.5.0:** trava para comandos git entre sessões, resumo do início que mostra onde cada
+sessão trabalha e limpeza automática de sessões encerradas. Veja o [changelog](CHANGELOG.md).
 
 Memória operacional compartilhada para vários agentes de IA trabalhando no mesmo repositório.
 

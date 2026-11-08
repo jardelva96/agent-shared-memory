@@ -2,7 +2,7 @@
 
 ## 1.5.0
 
-![Agent Shared Memory 1.5.0: the shell guard and seven fixes found in real use](docs/release-1.5.0-en.png)
+![Agent Shared Memory 1.5.0](docs/release-1.5.0-en.png)
 
 ### The shell guard
 
@@ -40,7 +40,7 @@ other session's edits went through the shell.
   commands and its last edit) and when it was last seen, so a new session can tell whether it is
   about to work in the same repository.
 
-### Mistakes that looked like success
+### Clearer answers
 
 - `hook claude <event>` with an unknown event exits 1 and lists the valid names, instead of doing
   nothing and exiting 0.

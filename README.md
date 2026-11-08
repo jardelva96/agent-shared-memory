@@ -4,8 +4,8 @@
 
 [Português](README.pt-BR.md)
 
-**New in 1.5.0:** a shell guard that stops git commands from moving a checkout another session
-works in, and seven fixes found in real use, each with a test. See the [changelog](CHANGELOG.md).
+**New in 1.5.0:** a guard for git commands between sessions, a start briefing that shows where
+each session works, and automatic cleanup of closed sessions. See the [changelog](CHANGELOG.md).
 
 Local-first operational memory for multiple AI coding agents working in the same repository.
 
