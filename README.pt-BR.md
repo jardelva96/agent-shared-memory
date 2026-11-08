@@ -385,6 +385,11 @@ guardado. `agent-memory guard-log` lista cada bloqueio e cada asm-ok, e é assim
 janela (padrão 30; 0 desliga), e `primeRules` troca as regras do resumo do começo da sessão.
 `setup claude --hooks-only` não instala o servidor MCP.
 
+Uma sessão que fecha sem SessionEnd (janela do editor fechada, travamento) ficaria no painel para
+sempre. Quando uma sessão começa, as sessões caladas há mais de `forgetOfflineAfterHours` (padrão
+24; 0 guarda todas) que não seguram tarefa nem reserva são esquecidas, no máximo uma vez por hora;
+o histórico delas fica. `agent-memory forget-idle` faz essa limpeza na hora.
+
 ## Detecção de conflito
 
 Se `AGENT-01` estiver trabalhando em:

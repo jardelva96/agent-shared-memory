@@ -29,6 +29,12 @@ other session's edits went through the shell.
 - `setup claude --hooks-only` installs the hooks without the MCP server.
 - LESSONS.md: every mistake met in real use, why it happened, the fix and its test.
 
+### Sessions that never ended
+
+- A session silent for longer than `forgetOfflineAfterHours` (default 24; 0 keeps them all) that
+  holds no claimed task and no reservation is forgotten when a session starts, at most once an
+  hour. Its history and journal stay. `agent-memory forget-idle` runs the sweep now.
+
 ## 1.4.0
 
 Measured with `bench/desempenho.mjs` (no model involved) on Windows, Node 24.

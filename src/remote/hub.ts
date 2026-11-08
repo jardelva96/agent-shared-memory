@@ -14,6 +14,7 @@ export const REMOTE_METHODS = new Set([
   'register',
   'reset',
   'unregister',
+  'forgetIdleSessions',
   'heartbeat',
   'activity',
   'sendMessage',

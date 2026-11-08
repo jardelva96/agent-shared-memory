@@ -1,3 +1,4 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AgentActivity, AgentMessage, AgentState, AgentStatus, ActivityType, AgentTask, CodePointer, Conflict, GuardContext, ProjectConfig, ProjectFact, TaskSchedule, TaskStatus } from '../models/types.js';
 import { createId, createScheduleId, createSessionId, createTaskId } from '../utils/ids.js';
@@ -14,6 +15,8 @@ import { effectiveStatus } from './render.js';
 import { ReservationStore, ReserveOptions, ReserveResult } from './reservations.js';
 import { ReviewDesk } from './reviews.js';
 import { MemoryStore } from './store.js';
+
+const HOUR_MS = 3_600_000;
 
 export interface ActivityInput {
   agentId: string;
@@ -230,6 +233,39 @@ export class AgentMemoryService {
     await this.reservations.release(agentId).catch(() => 0);
     await this.afterWrite();
     return state;
+  }
+
+  /**
+   * Forgets sessions silent for longer than forgetOfflineAfterHours that hold no claimed task and no
+   * reservation; runs at most once an hour unless forced. Returns the ids it removed.
+   */
+  async forgetIdleSessions(options: { force?: boolean; now?: Date } = {}): Promise<string[]> {
+    const hours = (await this.config()).forgetOfflineAfterHours ?? DEFAULT_CONFIG.forgetOfflineAfterHours ?? 24;
+    if (hours <= 0) return [];
+    const now = options.now ?? new Date();
+    const marker = path.join(this.store.paths.agentsDir, 'forget-idle.last');
+    if (!options.force) {
+      const last = Date.parse(await readFile(marker, 'utf8').catch(() => ''));
+      if (Number.isFinite(last) && now.getTime() - last < HOUR_MS) return [];
+    }
+    await writeFile(marker, now.toISOString(), 'utf8');
+
+    const cutoff = now.getTime() - hours * HOUR_MS;
+    const idle = (await this.store.listStates()).filter(s => Date.parse(s.lastHeartbeatAt) < cutoff);
+    if (idle.length === 0) return [];
+    const claimed = new Set((await this.tasks.list({ status: ['CLAIMED'] })).map(t => t.claimedBy));
+    const holding = new Set((await this.reservations.active(now)).map(r => r.agentId));
+    const forgotten: string[] = [];
+    for (const state of idle) {
+      if (claimed.has(state.id) || holding.has(state.id)) continue;
+      await this.store.appendActivity(
+        this.makeActivity({ agentId: state.id, type: 'UNREGISTERED', description: `Forgotten after ${hours} h offline; history preserved.`, task: state.task })
+      );
+      await this.store.deleteState(state.id);
+      forgotten.push(state.id);
+    }
+    if (forgotten.length > 0) await this.afterWrite();
+    return forgotten;
   }
 
   /** Reserves files, folders or globs for this agent. */

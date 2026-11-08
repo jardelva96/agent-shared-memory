@@ -14,7 +14,8 @@ export const DEFAULT_CONFIG: ProjectConfig = {
   maxTaskAttempts: 3,
   maxReviewRounds: 3,
   maxClosedTasks: 200,
-  guardMinutes: 30
+  guardMinutes: 30,
+  forgetOfflineAfterHours: 24
 };
 
 export async function configExists(root = process.cwd()): Promise<boolean> {

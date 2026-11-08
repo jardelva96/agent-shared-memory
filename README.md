@@ -377,6 +377,11 @@ is kept. `agent-memory guard-log` lists every block and every asm-ok, which is h
 sets the window (default 30; 0 turns the guard off), and `primeRules` replaces the default rules of
 the session briefing. `setup claude --hooks-only` skips the MCP server.
 
+A session that closes without SessionEnd (an editor window closed, a crash) would stay on the panel
+forever. When a session starts, sessions silent for longer than `forgetOfflineAfterHours` (default
+24; 0 keeps them all) that hold no claimed task and no reservation are forgotten, at most once an
+hour; their history stays. `agent-memory forget-idle` runs that sweep now.
+
 ## Conflict Detection
 
 If `AGENT-01` is working on:

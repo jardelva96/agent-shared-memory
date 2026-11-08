@@ -26,6 +26,21 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-08: the panel listed 28 sessions and 27 were long gone
+
+What happened: in a real workspace, `agent-memory status` listed 28 sessions; 27 had been OFFLINE
+for hours or days, most still "Registered and ready.". They were Claude Code sessions whose window
+closed without a SessionEnd. The one live session was lost in the list, and the list only grew.
+
+Why: a state was removed only by `unregister`, and the session-end hook releases reservations
+without removing the state. Nothing ever forgot a session that simply went away.
+
+Fix (1.5.0): `forgetOfflineAfterHours` (default 24). When a session starts, sessions silent for
+longer than that which hold no claimed task and no reservation are forgotten, at most once an hour;
+their history stays. `agent-memory forget-idle` runs the sweep on demand.
+
+Test: `tests/forget.test.ts`.
+
 ## 2026-11-08: asm-ok was written where the guard had blocked nothing
 
 What happened: in the Projetos-GitLab workspace, session CC-58964925 ended `git add -A` and

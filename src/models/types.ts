@@ -208,6 +208,11 @@ export interface ProjectConfig {
    * a git command change a shared checkout. 0 turns the guard off.
    */
   guardMinutes?: number;
+  /**
+   * Sessions silent for longer than this (hours) that hold no claimed task and no reservation are
+   * forgotten when a session starts; their history stays. 0 keeps every session forever.
+   */
+  forgetOfflineAfterHours?: number;
   /** Replaces the default "How to work here" lines of the session briefing. */
   primeRules?: string[];
 }

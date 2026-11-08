@@ -62,6 +62,19 @@ async function main(): Promise<void> {
       break;
     }
 
+    case 'forget-idle': {
+      const forgotten = await service.forgetIdleSessions({ force: true });
+      const hours = (await service.config()).forgetOfflineAfterHours ?? 24;
+      console.log(
+        hours <= 0
+          ? 'forgetOfflineAfterHours is 0: sessions are never forgotten.'
+          : forgotten.length
+            ? `Forgot ${forgotten.length} session(s) silent for over ${hours} h: ${forgotten.join(', ')}. Their history stays.`
+            : `No session has been silent for over ${hours} h without holding a task or a reservation.`
+      );
+      break;
+    }
+
     case 'log': {
       const limit = numberFlag(parsed.flags, 'limit') ?? 20;
       const agentId = stringFlag(parsed.flags, 'agent');

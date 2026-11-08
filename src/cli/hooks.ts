@@ -176,6 +176,8 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
     if (!(await service.store.stateExists(agentId))) await service.register(agentId, 'Claude Code').catch(() => undefined);
 
     if (event === 'session-start') {
+      // Sessions that closed without SessionEnd would otherwise pile up on the panel forever.
+      await service.forgetIdleSessions().catch(() => []);
       return {
         exitCode: 0,
         stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: await service.prime(agentId) } })
