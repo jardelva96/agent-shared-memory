@@ -1,9 +1,5 @@
-import { execFile } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
-
-const run = promisify(execFile);
 
 export type ChangeKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked';
 
@@ -20,12 +16,15 @@ export interface GitChange {
 }
 
 async function git(root: string, args: string[]): Promise<string> {
-  const { stdout } = await run('git', ['-c', 'core.quotepath=false', ...args], {
-    cwd: root,
-    maxBuffer: 32 * 1024 * 1024,
-    windowsHide: true
+  // Loaded on first use: most hook calls never run git.
+  const { execFile } = await import('node:child_process');
+  return new Promise((resolve, reject) => {
+    const options = { cwd: root, maxBuffer: 32 * 1024 * 1024, windowsHide: true };
+    execFile('git', ['-c', 'core.quotepath=false', ...args], options, (error, stdout, stderr) => {
+      if (error) reject(Object.assign(error, { stdout, stderr }));
+      else resolve(stdout);
+    });
   });
-  return stdout;
 }
 
 export async function isGitRepo(root: string): Promise<boolean> {

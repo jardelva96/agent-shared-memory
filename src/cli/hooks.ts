@@ -1,7 +1,6 @@
 /** Claude Code hooks and the git pre-commit guard. */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { AgentMemoryService } from '../core/service.js';
 import { isReadOnly, parseShell, ParsedShell, summarize } from '../core/shellguard.js';
@@ -9,7 +8,9 @@ import { dirtyFiles, findRepo } from '../git/repo.js';
 import { localTime, nowIso } from '../utils/time.js';
 import { remoteFromEnv, remoteService } from '../remote/client.js';
 
-function gitTopLevel(cwd: string): string | undefined {
+async function gitTopLevel(cwd: string): Promise<string | undefined> {
+  // Loaded here: a hook call that runs no git does not pay for child_process.
+  const { execFileSync } = await import('node:child_process');
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim() || undefined;
   } catch {
@@ -172,7 +173,7 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
   // With a hub, this checkout needs no .agents/ of its own: the memory lives on the hub.
   const remote = remoteFromEnv(env);
   const cwd = payload.cwd ?? process.cwd();
-  const root = findRoot(cwd) ?? (remote ? gitTopLevel(cwd) ?? cwd : undefined);
+  const root = findRoot(cwd) ?? (remote ? (await gitTopLevel(cwd)) ?? cwd : undefined);
   if (!root) return { exitCode: 0 };
 
   try {
@@ -253,6 +254,7 @@ export async function runClaudeHook(event: string, input: string, env: NodeJS.Pr
 export async function runGitPreCommit(root: string, env: NodeJS.ProcessEnv = process.env): Promise<HookOutcome> {
   const remote = remoteFromEnv(env);
   if (!remote && !findRoot(root)) return { exitCode: 0 };
+  const { execFileSync } = await import('node:child_process');
   let staged: string[];
   try {
     staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' }).split('\n').map(s => s.trim()).filter(Boolean);
