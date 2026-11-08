@@ -2,6 +2,8 @@
 
 ## 1.5.0
 
+![Agent Shared Memory 1.5.0: the shell guard and seven fixes found in real use](docs/release-1.5.0-en.png)
+
 ### The shell guard
 
 Two sessions in the same checkout: one switched the branch while the other had uncommitted work

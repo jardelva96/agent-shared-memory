@@ -1,6 +1,12 @@
+<img src="docs/logo.svg" alt="Logo do Agent Shared Memory" width="96">
+
 # Agent Shared Memory
 
 [English](README.md)
+
+**Novo na 1.5.0:** uma trava do terminal que impede comandos git de mexer numa pasta onde outra
+sessão está trabalhando, e sete correções achadas no uso real, cada uma com teste. Veja o
+[changelog](CHANGELOG.md).
 
 Memória operacional compartilhada para vários agentes de IA trabalhando no mesmo repositório.
 

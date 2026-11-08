@@ -1,6 +1,11 @@
+<img src="docs/logo.svg" alt="Agent Shared Memory logo" width="96">
+
 # Agent Shared Memory
 
 [Português](README.pt-BR.md)
+
+**New in 1.5.0:** a shell guard that stops git commands from moving a checkout another session
+works in, and seven fixes found in real use, each with a test. See the [changelog](CHANGELOG.md).
 
 Local-first operational memory for multiple AI coding agents working in the same repository.
 
