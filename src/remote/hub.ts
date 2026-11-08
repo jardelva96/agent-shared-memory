@@ -22,6 +22,7 @@ export const REMOTE_METHODS = new Set([
   'createTask',
   'claimTask',
   'finishTask',
+  'renewTask',
   'reserve',
   'release',
   'remember',

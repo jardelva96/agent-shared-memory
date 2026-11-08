@@ -8,6 +8,7 @@ export type {
   CompactResult,
   CreateScheduleInput,
   CreateTaskInput,
+  FinishedTask,
   FinishOptions,
   InboxResult,
   SendMessageInput

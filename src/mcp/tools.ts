@@ -268,7 +268,7 @@ export const TOOLS: ToolDefinition[] = [
     name: 'memory_task_claim',
     description:
       'Take the oldest task available to you and start working on it. The claim is exclusive, and expires if you stop ' +
-      'without finishing, so the work returns to the queue rather than being lost.',
+      'without finishing, so the work returns to the queue rather than being lost. memory_heartbeat keeps it during long work.',
     inputSchema: {
       type: 'object',
       properties: { agent: { type: 'string', description: 'Your agent id.' } },
@@ -279,10 +279,11 @@ export const TOOLS: ToolDefinition[] = [
     name: 'memory_task_finish',
     description:
       'Close a task you claimed. Report the outcome honestly: use FAILED with the reason when it did not work, ' +
-      'rather than DONE. Whoever queued it is told either way.',
+      'rather than DONE. Whoever queued it is told either way. Refused when the claim passed to another agent.',
     inputSchema: {
       type: 'object',
       properties: {
+        agent: { type: 'string', description: 'Your agent id, so a task another agent now holds is not closed by you.' },
         id: { type: 'string', description: 'Task id, e.g. T-ABC123.' },
         status: { type: 'string', enum: ['DONE', 'FAILED', 'CANCELLED'], description: 'How it ended.' },
         result: { type: 'string', description: 'What happened, briefly.' }
@@ -293,7 +294,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'memory_heartbeat',
     description:
-      'Refresh this agent presence so it does not appear OFFLINE to the others. ' +
+      'Refresh this agent presence so it does not appear OFFLINE to the others, and extend the claim on the tasks it holds. ' +
       'Call during long stretches of work where nothing else is being recorded.',
     inputSchema: {
       type: 'object',
@@ -565,7 +566,19 @@ export async function callTool(
       if (!['DONE', 'FAILED', 'CANCELLED'].includes(status)) {
         throw new RpcError(INVALID_PARAMS, `Invalid status: ${status}. Use DONE, FAILED or CANCELLED.`);
       }
-      const task = await service.finishTask(requiredString(args, 'id'), status, optionalString(args, 'result'));
+      const task = await service.finishTask(
+        requiredString(args, 'id'),
+        status,
+        optionalString(args, 'result'),
+        pinnedAgent ?? optionalString(args, 'agent')
+      );
+      // A hub older than this answer has no `closed`; only an explicit false means nothing changed.
+      if (task.closed === false) {
+        throw new Error(
+          `${task.id} had already ended as ${task.status}${task.claimedBy ? ` by ${task.claimedBy}` : ''}; ` +
+            'this result was not recorded. A finished task never changes.'
+        );
+      }
       return `${task.id} is now ${task.status}.`;
     }
     case 'memory_heartbeat': {
