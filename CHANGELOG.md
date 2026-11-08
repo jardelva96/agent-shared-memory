@@ -16,7 +16,8 @@ other session's edits went through the shell.
   `add .`, `commit -a`) is refused while another session works in that checkout and there are
   recent changes this session did not make, or while another session just moved the branch. The
   message lists the files, their age and the sessions seen there.
-- `# asm-ok: <why>` at the end of the command lets it through; the reason is kept.
+- `# asm-ok: <why>` at the end of the command lets it through; the reason is kept. guard-log tells
+  an asm-ok the guard would have blocked from one that was not needed (`asm-ok not needed`).
 - `agent-memory guard-log` lists every block, every asm-ok and every change let through that no
   session claimed: the record to learn from.
 - A session that ended (SessionEnd) blocks nobody.

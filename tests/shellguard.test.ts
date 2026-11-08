@@ -143,6 +143,28 @@ test('asm-ok lets the command through and leaves it on record for guard-log', as
   });
 });
 
+test('asm-ok with no other session in the checkout is noted as not needed', async () => {
+  await withWorkspace(async (root, app, service) => {
+    // Clean folder, nobody else around: the incident command needs no asm-ok.
+    const out = await runClaudeHook('pre-shell', shell(root, `cd "${app}" && git add -A # asm-ok: pasta limpa`), as('TWO'));
+    assert.equal(out.exitCode, 0);
+    const notes = (await service.store.recentActivities(50)).map(e => e.description);
+    assert.ok(notes.some(d => d.startsWith('guard: asm-ok not needed (pasta limpa): git add -A')), notes.join('\n'));
+    assert.ok(!notes.some(d => d.startsWith('guard: blocked') || d.startsWith('guard: let through by asm-ok')), notes.join('\n'));
+  });
+});
+
+test('asm-ok in the incident of 2026-11-07 scenario is noted as would have blocked', async () => {
+  await withWorkspace(async (root, app, service) => {
+    await shellWrite(root, 'ONE', path.join(app, 'src', 'senha.cs'), 'mudou\n');
+    const out = await runClaudeHook('pre-shell', shell(root, `cd "${app}" && git add -A && git switch -q prod # asm-ok: quero voltar`), as('TWO'));
+    assert.equal(out.exitCode, 0);
+    const notes = (await service.store.recentActivities(50)).map(e => e.description);
+    assert.ok(notes.some(d => d.startsWith('guard: let through by asm-ok (quero voltar), would have blocked: ')), notes.join('\n'));
+    assert.ok(!notes.some(d => d.startsWith('guard: blocked')), notes.join('\n'));
+  });
+});
+
 test('changes made with the edit tools are the session own too', async () => {
   await withWorkspace(async (root, app) => {
     const file = path.join(app, 'src', 'outro.cs');

@@ -26,6 +26,26 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-08: asm-ok was written where the guard had blocked nothing
+
+What happened: in the Projetos-GitLab workspace, session CC-58964925 ended `git add -A` and
+`git switch -q prod` with `# asm-ok: ...` although the guard had blocked nothing (the journal has
+no "guard: blocked" line before them; one reason was even "pasta limpa", clean folder). guard-log
+printed "guard: let through by asm-ok (...)" for both, which reads as if the guard would have
+blocked. Reasons that keep coming back are how a wrong block is found, so asm-ok where nothing was
+blocked poisons that analysis.
+
+Why the tool allowed it: the guard recorded every command carrying asm-ok the same way, without
+checking whether its rule would have blocked it at all.
+
+Fix (1.5.0): guardShell now runs the same rule for a command carrying asm-ok. When it would have
+blocked, the note says "guard: let through by asm-ok (<reason>), would have blocked: <summary>".
+When it would not, the note says "guard: asm-ok not needed (<reason>): <command>". The command is
+never blocked while asm-ok is present.
+
+Test: `tests/shellguard.test.ts`, "asm-ok with no other session in the checkout is noted as not
+needed" and "asm-ok in the incident of 2026-11-07 scenario is noted as would have blocked".
+
 ## 2026-11-07: a branch was switched under another session
 
 What happened: two Claude Code sessions worked in the same checkout. Session A had uncommitted

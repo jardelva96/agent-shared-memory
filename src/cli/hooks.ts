@@ -93,11 +93,6 @@ async function guardShell(service: AgentMemoryService, root: string, agentId: st
       gitNote();
       continue;
     }
-    if (parsed.acknowledged !== undefined) {
-      notes.push([`guard: let through by asm-ok (${parsed.acknowledged || 'no reason given'}): ${step.text}`, place.key]);
-      gitNote();
-      continue;
-    }
 
     const since = new Date(Date.now() - minutes * 60_000).toISOString();
     const context = await service.guardContext(agentId, place.key, since);
@@ -110,7 +105,13 @@ async function guardShell(service: AgentMemoryService, root: string, agentId: st
     const stillThere = new Set(context.others.filter(o => Date.now() - Date.parse(o.at) <= STILL_THERE_MS).map(o => o.id));
     const theirGit = step.risk === 'branch' ? context.gitOps.filter(op => stillThere.has(op.id)) : [];
 
-    if ((foreign.length > 0 && context.others.length > 0) || theirGit.length > 0) {
+    // The rule is the same with or without asm-ok: with it the guard never blocks, it only notes what it would have done.
+    const wouldBlock = (foreign.length > 0 && context.others.length > 0) || theirGit.length > 0;
+    const summary = `${step.text} (${foreign.length} change(s) not made here; others: ${context.others.map(o => o.id).join(', ')})`;
+    if (wouldBlock && parsed.acknowledged !== undefined) {
+      notes.push([`guard: let through by asm-ok (${parsed.acknowledged || 'no reason given'}), would have blocked: ${summary}`, place.key]);
+      gitNote();
+    } else if (wouldBlock) {
       const lines = [`\`${step.text}\` would change the checkout ${place.key} while another session works in it.`];
       if (foreign.length > 0) {
         lines.push(`Uncommitted changes this session did not make, from the last ${minutes} min:`);
@@ -120,7 +121,10 @@ async function guardShell(service: AgentMemoryService, root: string, agentId: st
       for (const op of theirGit.slice(0, 3)) lines.push(`${op.id} ran \`${op.description}\` here ${ago(op.at)}.`);
       lines.push(`Sessions seen in ${place.key}: ${context.others.map(o => `${o.id} (${o.how}, ${ago(o.at)}${o.doing ? `: ${o.doing.slice(0, 60)}` : ''})`).join('; ')}.`);
       problems.push(lines.join('\n'));
-      notes.push([`guard: blocked ${step.text} (${foreign.length} change(s) not made here; others: ${context.others.map(o => o.id).join(', ')})`, place.key]);
+      notes.push([`guard: blocked ${summary}`, place.key]);
+    } else if (parsed.acknowledged !== undefined) {
+      notes.push([`guard: asm-ok not needed (${parsed.acknowledged || 'no reason given'}): ${step.text}`, place.key]);
+      gitNote();
     } else {
       if (foreign.length > 0) notes.push([`guard: let through ${step.text} with ${foreign.length} recent change(s) nobody here claimed`, place.key]);
       gitNote();
