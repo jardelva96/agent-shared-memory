@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Only the agent that holds a task can finish it (MCP `memory_task_finish`, `task done|fail --agent`), and a late result says it was not recorded; a heartbeat and a running `run` keep the claim alive, and `run` refuses `--timeout 0` or a timeout that reaches the lease.
+
 ## 1.5.0
 
 ![Agent Shared Memory 1.5.0](docs/release-1.5.0-en.png)

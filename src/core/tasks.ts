@@ -192,9 +192,11 @@ export class TaskStore {
       // A recorded verdict is final: a later call from the runner's exit code must not change it.
       if (TERMINAL.includes(task.status)) return { task, closed: false };
 
-      if (by && task.claimedBy && task.claimedBy !== by) {
+      // Cancelling is an admin action, so anyone may cancel; only the holder may give a verdict.
+      if (by && status !== 'CANCELLED' && task.claimedBy && task.claimedBy !== by) {
         throw new Error(
-          `${id} is held by ${task.claimedBy}, not ${by}. The claim expired and the task was reassigned.`
+          `${id} is held by ${task.claimedBy}, not ${by}. The claim expired and the task was reassigned; ` +
+            'this result was not recorded.'
         );
       }
       const now = nowIso();
@@ -205,6 +207,18 @@ export class TaskStore {
       task.claimExpiresAt = undefined;
       await this.write(task);
       return { task, closed: true };
+    });
+  }
+
+  /** Extends the claim of a task `agentId` still holds; false when it holds it no more. */
+  async renew(id: string, agentId: string, seconds: number): Promise<boolean> {
+    const p = this.paths;
+    return withFileLock(path.join(p.locksDir, 'tasks.lock'), async () => {
+      const task = await this.read(id);
+      if (task.status !== 'CLAIMED' || task.claimedBy !== agentId) return false;
+      task.claimExpiresAt = new Date(Date.now() + seconds * 1000).toISOString();
+      await this.write(task);
+      return true;
     });
   }
 

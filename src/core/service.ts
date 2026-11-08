@@ -91,6 +91,9 @@ export interface FinishOptions {
   fromExitCode?: boolean;
 }
 
+/** The task after finishTask; `closed` is false when it had already ended and nothing changed. */
+export type FinishedTask = AgentTask & { closed: boolean };
+
 export interface CreateTaskInput {
   title: string;
   createdBy: string;
@@ -471,8 +474,18 @@ export class AgentMemoryService {
     const now = nowIso();
     const next: AgentState = { ...state, lastHeartbeatAt: now, updatedAt: now };
     await this.store.writeState(next);
-    await this.afterWrite();
+    // A live agent keeps the tasks it holds, so long work is not handed to someone else.
+    const config = await this.config();
+    for (const task of await this.tasks.list({ status: ['CLAIMED'], agent: agentId })) {
+      if (task.claimedBy === agentId) await this.tasks.renew(task.id, agentId, config.taskClaimSeconds);
+    }
+    await this.afterWrite(config);
     return next;
+  }
+
+  /** Extends the claim on a task this agent holds; false when the claim was lost. */
+  async renewTask(id: string, agentId: string): Promise<boolean> {
+    return this.tasks.renew(id, agentId, (await this.config()).taskClaimSeconds);
   }
 
   async activity(input: ActivityInput): Promise<ActivityResult> {
@@ -673,11 +686,11 @@ export class AgentMemoryService {
     result?: string,
     by?: string,
     options: FinishOptions = {}
-  ): Promise<AgentTask> {
+  ): Promise<FinishedTask> {
     const { task, closed } = await this.tasks.finish(id, status, result, by);
 
     // Already closed: settling again would count the same vote twice.
-    if (!closed) return task;
+    if (!closed) return { ...task, closed };
 
     if (task.reviewOf) {
       // A failure from the exit code means the reviewer gave no verdict, so the review is retried.
@@ -716,7 +729,7 @@ export class AgentMemoryService {
     }
 
     await this.afterWrite();
-    return task;
+    return { ...task, closed };
   }
 
   async createSchedule(input: CreateScheduleInput): Promise<TaskSchedule> {

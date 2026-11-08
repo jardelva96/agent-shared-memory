@@ -123,7 +123,13 @@ export async function runQueue(
     }
 
     log(`claimed ${task.id}: ${task.title}`);
-    const outcome = await executeTask(service, task, options);
+    const stopRenewing = await keepClaim(service, task, options.agentId, log);
+    let outcome: RunOutcome;
+    try {
+      outcome = await executeTask(service, task, options);
+    } finally {
+      stopRenewing();
+    }
     // Record the result first: finishTask can throw (lost claim, lock contention).
     outcomes.push(outcome);
 
@@ -155,6 +161,34 @@ export async function runQueue(
   }
 
   return outcomes;
+}
+
+/** Renews the claim every third of the lease while the command runs; returns the stop function. */
+async function keepClaim(
+  service: AgentMemoryService,
+  task: AgentTask,
+  agentId: string,
+  log: (line: string) => void
+): Promise<() => void> {
+  const lease = (await service.config().catch(() => undefined))?.taskClaimSeconds ?? 0;
+  if (!(lease > 0)) return () => undefined;
+  let stopped = false;
+  let warned = false;
+  const timer = setInterval(() => {
+    service.renewTask(task.id, agentId).then(
+      held => {
+        if (held || stopped || warned) return;
+        warned = true;
+        log(`${task.id} is no longer held by ${agentId}; its result will not be recorded`);
+      },
+      () => undefined
+    );
+  }, (lease * 1000) / 3);
+  timer.unref();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 /** Kills the whole process tree, not just the shell we spawned. */
