@@ -26,7 +26,7 @@ test('the briefing says where each active session works and when it was last see
     await service.notePlaces('OTHER', ['jva-editora']);
 
     const line = lineOf(await service.prime('ME'), 'OTHER');
-    assert.match(line, /; in (jva-editora, GameBoost|GameBoost, jva-editora); last activity just now$/, line);
+    assert.match(line, / \[in (jva-editora, GameBoost|GameBoost, jva-editora); last activity just now\]$/, line);
   });
 });
 
@@ -36,7 +36,7 @@ test('an edit counts as working in the folder of the file', async () => {
     await service.register('EDITOR');
     await service.activity({ agentId: 'EDITOR', type: 'INTENT', description: 'Edit web/src/app.ts', pointer: { file: 'web/src/app.ts' } });
 
-    assert.match(lineOf(await service.prime('ME'), 'EDITOR'), /\(web\/src\/app\.ts\); in web; last activity just now$/);
+    assert.match(lineOf(await service.prime('ME'), 'EDITOR'), /\(web\/src\/app\.ts\) \[in web; last activity just now\]$/);
   });
 });
 
@@ -45,7 +45,7 @@ test('a session that touched nothing yet says so', async () => {
     await service.register('ME');
     await service.register('NEW');
 
-    assert.match(lineOf(await service.prime('ME'), 'NEW'), /: Registered and ready\.; no files touched yet; last activity just now$/);
+    assert.match(lineOf(await service.prime('ME'), 'NEW'), /: Registered and ready\. \[no files touched yet; last activity just now\]$/);
   });
 });
 
@@ -58,7 +58,7 @@ test('only recent places count, so an old folder does not look busy', async () =
     await service.store.writeState({ ...state, places: { 'old-repo': hoursAgo(5), 'new-repo': new Date().toISOString() } });
 
     const line = lineOf(await service.prime('ME'), 'OTHER');
-    assert.match(line, /; in new-repo;/, line);
+    assert.match(line, /\[in new-repo;/, line);
     assert.doesNotMatch(line, /old-repo/);
   });
 });

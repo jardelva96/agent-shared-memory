@@ -396,7 +396,7 @@ export class AgentMemoryService {
       const since = Date.now() - (config.guardMinutes || 30) * 60_000;
       lines.push(
         'Agents active now:',
-        ...others.map(s => `- ${s.id}: ${s.current?.description ?? '-'}${s.current?.pointer ? ` (${formatPointer(s.current.pointer)})` : ''}; ${whereWorking(s, since)}; last activity ${minutesAgo(s.lastHeartbeatAt)}`),
+        ...others.map(s => `- ${s.id}: ${s.current?.description ?? '-'}${s.current?.pointer ? ` (${formatPointer(s.current.pointer)})` : ''} [${whereWorking(s, since)}; last activity ${minutesAgo(s.lastHeartbeatAt)}]`),
         ''
       );
     }
