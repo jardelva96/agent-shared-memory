@@ -87,7 +87,8 @@ export function outlineSymbols(source: string, file = ''): OutlineEntry[] {
 }
 
 function entry(lines: string[], index: number, name: string, kind: string, container?: string): OutlineEntry {
-  const slice = sliceAt(lines, index);
+  // The real range: a type of 1,800 lines must not be listed as ending at line 400.
+  const slice = sliceAt(lines, index, Infinity);
   return { name, kind, container, startLine: slice.startLine, declarationLine: slice.declarationLine, endLine: slice.endLine };
 }
 
@@ -382,7 +383,9 @@ export async function editSymbol(
     if (declaration === undefined) {
       throw new Error(`Symbol ${JSON.stringify(parsed.symbol)} was not found in ${parsed.file}. Read the file to check the name.`);
     }
-    const slice = sliceAt(lines, declaration);
+    // The whole symbol: cut at the read limit, a replace would leave the old tail behind and an
+    // insert after it would land inside it.
+    const slice = sliceAt(lines, declaration, Infinity);
     const indent = /^\s*/.exec(lines[declaration])![0];
 
     const incoming = code.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n');

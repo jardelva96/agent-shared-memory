@@ -225,3 +225,36 @@ test('rename changes the whole word only, never part of a longer name', async ()
     }
   );
 });
+
+/** A C# class of `count` five-line methods: 100 of them run past the 400-line read limit. */
+function longClass(count: number): string {
+  const methods = Array.from({ length: count }, (_, i) => [`    public int M${i}()`, '    {', `        return ${i};`, '    }', ''].join('\n'));
+  return ['namespace Loja', '{', '    public class Grande', '    {', ...methods, '    }', '}', ''].join('\n');
+}
+
+test('a type longer than the read limit is listed with its real end', () => {
+  // Seen on a 1,863-line C# service: the class was listed as lines 20-419, its methods up to 1,133.
+  const outline = outlineSymbols(longClass(100), 'Grande.cs');
+  assert.equal(outline.find(e => e.name === 'Grande')!.endLine, 505);
+  assert.equal(outline.find(e => e.name === 'M99')!.endLine, 503);
+});
+
+test('inserting after a type longer than the read limit puts the code after it, not inside it', async () => {
+  await withProject({ 'src/Grande.cs': longClass(100) }, async root => {
+    await editSymbol(root, 'src/Grande.cs::Grande', 'public class Depois\n{\n}', 'insert_after');
+    const lines = (await readFile(path.join(root, 'src/Grande.cs'), 'utf8')).split('\n');
+    assert.equal(lines[504], '    }', 'Grande still closes where it did');
+    assert.equal(lines.indexOf('    public class Depois'), 506, 'the new type comes after it, past one blank line');
+  });
+});
+
+test('replacing a method longer than the read limit replaces all of it', async () => {
+  const body = Array.from({ length: 450 }, (_, i) => `        var v${i} = ${i};`);
+  const source = ['public class Caixa', '{', '    public int Soma()', '    {', ...body, '        return 0;', '    }', '', '    public int Outro() { return 1; }', '}', ''].join('\n');
+  await withProject({ 'src/Caixa.cs': source }, async root => {
+    const result = await editSymbol(root, 'src/Caixa.cs::Caixa.Soma', 'public int Soma()\n{\n    return 1;\n}');
+    assert.equal(result.removedLines, 454);
+    const after = await readFile(path.join(root, 'src/Caixa.cs'), 'utf8');
+    assert.equal(after, ['public class Caixa', '{', '    public int Soma()', '    {', '        return 1;', '    }', '', '    public int Outro() { return 1; }', '}', ''].join('\n'));
+  });
+});

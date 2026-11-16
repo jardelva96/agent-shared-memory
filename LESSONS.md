@@ -26,6 +26,25 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-16: a long class was listed, and edited, as if it ended at its 400th line
+
+What happened: reading a legacy C# service by symbol (one class, 1,863 lines), `symbols` listed the
+class as lines 20-419 while listing its own methods down to line 1,133.
+
+Why the tool allowed it: every symbol was cut at 400 lines, a limit meant only for how much one
+read returns. The outline reported the cut as the end of the class. `memory_replace_symbol` on a
+symbol longer than that replaced its first 400 lines and left the rest behind (the syntax check then
+refused it), and `memory_insert_symbol` after a longer type put the new code inside it, where a
+balanced block still parses and nothing refused it.
+
+Fix: listing and editing always use the whole symbol. A read of a symbol longer than 400 lines says
+it was cut and on which line the symbol really ends. Unreleased.
+
+Test: `a type longer than the read limit is listed with its real end`, `inserting after a type
+longer than the read limit puts the code after it, not inside it`, `replacing a method longer than
+the read limit replaces all of it` (symbols.test.ts), `a pointer to a symbol longer than the read
+limit says it was cut and where it ends` (mcp.test.ts).
+
 ## 2026-11-08: `run --once` meant for one task ran the whole queue
 
 What happened: `run --agent MAGNET --once` was started to run one task. It ran all three ready

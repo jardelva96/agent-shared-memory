@@ -854,6 +854,13 @@ async function readPointerText(service: AgentMemoryService, raw: string): Promis
       'Read the file to check the spelling.'
     );
   }
+  if (found.continuesTo) {
+    return (
+      `${pointer.file}:${found.startLine}-${found.endLine} (${pointer.symbol}, cut: it goes on to line ${found.continuesTo}. ` +
+      'List its members with memory_symbols and read them one at a time.)\n\n' +
+      found.text
+    );
+  }
   return `${pointer.file}:${found.startLine}-${found.endLine} (${pointer.symbol})\n\n${found.text}`;
 }
 

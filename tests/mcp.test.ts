@@ -332,3 +332,16 @@ test('a symbol that is not there says so instead of guessing', async () => {
     assert.match(missing, /Read the file/);
   });
 });
+
+test('a pointer to a symbol longer than the read limit says it was cut and where it ends', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    const members = Array.from({ length: 450 }, (_, i) => `    public int M${i}() { return ${i}; }`);
+    await writeFile(path.join(service.root, 'Grande.cs'), ['public class Grande', '{', ...members, '}', ''].join('\n'));
+
+    const text = (await call('memory_read_pointer', { pointer: 'Grande.cs::Grande' })).content[0].text;
+    assert.match(text, /^Grande\.cs:1-400 \(Grande, cut: it goes on to line 453\./, 'a cut read must not pass for the whole symbol');
+    assert.match(text, /memory_symbols/, 'and it says how to read the rest');
+    assert.doesNotMatch(text, /M449/);
+  });
+});

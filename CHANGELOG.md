@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A symbol longer than 400 lines is listed with its real range, and `memory_replace_symbol` /
+  `memory_insert_symbol` work on all of it: before, a replace left its tail behind and an insert
+  after a long type landed inside it. `memory_read_pointer` still returns at most 400 lines, and now
+  says when it cut a symbol and where the symbol ends.
 - Only the agent that holds a task can finish it (MCP `memory_task_finish`, `task done|fail --agent`), and a late result says it was not recorded; a heartbeat and a running `run` keep the claim alive, and `run` refuses `--timeout 0` or a timeout that reaches the lease.
 
 ## 1.5.0
