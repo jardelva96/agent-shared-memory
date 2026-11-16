@@ -3,12 +3,13 @@
  * across the project, where it is used, and changing one symbol in place.
  */
 import type { Dirent } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { atomicWrite, withFileLock } from '../utils/fs.js';
 import { findDeclaration, maskLiterals, regexEnd, sliceAt } from './extract.js';
 import { resolvePaths } from './paths.js';
+import { encodeSource, readSource, SourceEncoding } from './sourcefile.js';
 import { syntaxProblem } from './syntax.js';
 import { parsePointer } from './pointer.js';
 
@@ -45,6 +46,8 @@ export interface EditResult {
   fromLine: number;
   toLine: number;
   removedLines: number;
+  /** The file was written back in the encoding it had. */
+  encoding: SourceEncoding;
 }
 
 const MODIFIERS =
@@ -87,7 +90,8 @@ export function outlineSymbols(source: string, file = ''): OutlineEntry[] {
 }
 
 function entry(lines: string[], index: number, name: string, kind: string, container?: string): OutlineEntry {
-  const slice = sliceAt(lines, index);
+  // The real range: a type of 1,800 lines must not be listed as ending at line 400.
+  const slice = sliceAt(lines, index, Infinity);
   return { name, kind, container, startLine: slice.startLine, declarationLine: slice.declarationLine, endLine: slice.endLine };
 }
 
@@ -265,8 +269,33 @@ const MAX_FILE_BYTES = 1_000_000;
 /** Files read at once by the project-wide searches. */
 const READ_BATCH = 32;
 
+/** How many code files one project-wide search reads, unless AGENT_MEMORY_MAX_FILES says otherwise. */
+export const MAX_SCAN_FILES = 20_000;
+
+/** What is left of one search's file limit. `skipped` turns true once a code file had to be left out. */
+export interface ScanBudget {
+  max: number;
+  left: number;
+  skipped?: boolean;
+}
+
+export function scanBudget(max?: number): ScanBudget {
+  const fromEnv = Number(process.env.AGENT_MEMORY_MAX_FILES);
+  const limit = max ?? (Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : MAX_SCAN_FILES);
+  return { max: limit, left: limit };
+}
+
+/** A line to add to a search result that did not cover the whole project, or '' when it did. */
+export function partialSearch(budget: ScanBudget): string {
+  if (!budget.skipped) return '';
+  return (
+    `\n(Searched only the first ${budget.max} code files: the project has more, so this may be incomplete. ` +
+    'Point --root at a narrower folder, or raise AGENT_MEMORY_MAX_FILES.)'
+  );
+}
+
 /** Every source file under `dir`, skipping dependencies, build output and this tool's own folder. */
-export async function* codeFiles(root: string, dir = root, budget = { left: 20_000 }): AsyncGenerator<string> {
+export async function* codeFiles(root: string, dir = root, budget: ScanBudget = scanBudget()): AsyncGenerator<string> {
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -274,7 +303,7 @@ export async function* codeFiles(root: string, dir = root, budget = { left: 20_0
     return;
   }
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-    if (budget.left <= 0) return;
+    if (budget.skipped) return;
     const name = entry.name;
     const full = path.join(dir, name);
     // The entry knows its own type; only a link, or a code file's size, costs a stat.
@@ -285,6 +314,11 @@ export async function* codeFiles(root: string, dir = root, budget = { left: 20_0
     } else if (kind.isFile() && CODE_FILE.test(name) && !/\.d\.ts$/.test(name)) {
       const size = (await stat(full).catch(() => undefined))?.size ?? Infinity;
       if (size > MAX_FILE_BYTES) continue;
+      // Flagged only on a code file that really is left out, so a search that fits says so.
+      if (budget.left <= 0) {
+        budget.skipped = true;
+        return;
+      }
       budget.left--;
       yield full;
     }
@@ -292,10 +326,10 @@ export async function* codeFiles(root: string, dir = root, budget = { left: 20_0
 }
 
 /** Each source file with its text, read in parallel batches, in the order codeFiles walks them. */
-async function* codeSources(root: string): AsyncGenerator<{ file: string; source: string }> {
+async function* codeSources(root: string, budget: ScanBudget): AsyncGenerator<{ file: string; source: string }> {
   let batch: string[] = [];
-  const read = () => Promise.all(batch.map(async file => ({ file, source: await readFile(file, 'utf8').catch(() => '') })));
-  for await (const file of codeFiles(root)) {
+  const read = () => Promise.all(batch.map(async file => ({ file, source: (await readSource(file).catch(() => undefined))?.text ?? '' })));
+  for await (const file of codeFiles(root, root, budget)) {
     batch.push(file);
     if (batch.length < READ_BATCH) continue;
     yield* await read();
@@ -320,14 +354,14 @@ function bareName(symbol: string): string {
   return (segments[segments.length - 1] ?? '').trim();
 }
 
-/** Where `symbol` is declared, across the project. */
-export async function findSymbol(root: string, symbol: string, limit = 20): Promise<SymbolMatch[]> {
+/** Where `symbol` is declared, across the project. Pass a budget to learn whether the search covered it all. */
+export async function findSymbol(root: string, symbol: string, limit = 20, budget: ScanBudget = scanBudget()): Promise<SymbolMatch[]> {
   const name = bareName(symbol);
   const qualifier = symbol.includes('.') ? symbol.split('(')[0].split('.').slice(-2, -1)[0] : undefined;
   if (!name) return [];
   const word = wholeWord(name);
   const matches: SymbolMatch[] = [];
-  for await (const { file, source } of codeSources(root)) {
+  for await (const { file, source } of codeSources(root, budget)) {
     if (!word.test(source)) continue;
     for (const item of outlineSymbols(source, file)) {
       if (item.name !== name || (qualifier && item.container && item.container !== qualifier)) continue;
@@ -340,12 +374,12 @@ export async function findSymbol(root: string, symbol: string, limit = 20): Prom
 }
 
 /** Lines that use `symbol`, outside strings and comments and other than its own declaration. */
-export async function findReferences(root: string, symbol: string, limit = 100): Promise<ReferenceMatch[]> {
+export async function findReferences(root: string, symbol: string, limit = 100, budget: ScanBudget = scanBudget()): Promise<ReferenceMatch[]> {
   const name = bareName(symbol);
   if (!name) return [];
   const word = wholeWord(name);
   const found: ReferenceMatch[] = [];
-  for await (const { file, source } of codeSources(root)) {
+  for await (const { file, source } of codeSources(root, budget)) {
     if (!word.test(source)) continue;
     const declared = new Set(outlineSymbols(source, file).filter(s => s.name === name).map(s => s.declarationLine));
     const lines = source.split('\n');
@@ -375,14 +409,16 @@ export async function editSymbol(
 
   const lockName = createHash('sha1').update(rel.toLowerCase()).digest('hex').slice(0, 16);
   return withFileLock(path.join(resolvePaths(base).locksDir, `edit-${lockName}.lock`), async () => {
-    const source = await readFile(target, 'utf8');
+    const { text: source, encoding } = await readSource(target);
     const eol = source.includes('\r\n') ? '\r\n' : '\n';
     const lines = source.split(/\r?\n/);
     const declaration = findDeclaration(lines, parsed.symbol!);
     if (declaration === undefined) {
       throw new Error(`Symbol ${JSON.stringify(parsed.symbol)} was not found in ${parsed.file}. Read the file to check the name.`);
     }
-    const slice = sliceAt(lines, declaration);
+    // The whole symbol: cut at the read limit, a replace would leave the old tail behind and an
+    // insert after it would land inside it.
+    const slice = sliceAt(lines, declaration, Infinity);
     const indent = /^\s*/.exec(lines[declaration])![0];
 
     const incoming = code.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n');
@@ -413,6 +449,8 @@ export async function editSymbol(
 
     const next = lines.join(eol);
     const relPosix = rel.split(path.sep).join('/');
+    // Before any parser runs: new text the file's encoding cannot hold is refused.
+    const bytes = encodeSource(next, encoding);
     // Refuse a change that breaks a file that parsed before.
     if (options.checkSyntax !== false) {
       const after = await syntaxProblem(relPosix, next, base);
@@ -423,8 +461,8 @@ export async function editSymbol(
         );
       }
     }
-    await atomicWrite(target, next);
-    return { file: relPosix, symbol: parsed.symbol!, mode, fromLine, toLine: fromLine + written.length - 1, removedLines };
+    await atomicWrite(target, bytes);
+    return { file: relPosix, symbol: parsed.symbol!, mode, fromLine, toLine: fromLine + written.length - 1, removedLines, encoding };
   });
 }
 
@@ -440,14 +478,37 @@ export interface RenamePlan {
   applied: boolean;
 }
 
-/** Renames a symbol everywhere it is used, as a plan first and on disk only when asked. */
-export async function renameSymbol(root: string, symbol: string, to: string, options: { apply?: boolean } = {}): Promise<RenamePlan> {
+/**
+ * Renames a symbol everywhere it is used, as a plan first and on disk only when asked. `maxFiles`
+ * overrides the search limit; a project with more code files than that is refused, since a rename
+ * that misses uses breaks the build.
+ */
+export async function renameSymbol(
+  root: string,
+  symbol: string,
+  to: string,
+  options: { apply?: boolean; maxFiles?: number } = {}
+): Promise<RenamePlan> {
   const from = bareName(symbol);
   const plan: RenamePlan = { from, to, changes: [], applied: false };
   if (!/^[A-Za-z_$][\w$]*$/.test(to)) return { ...plan, refused: `Not a valid name: ${JSON.stringify(to)}.` };
   if (to === from) return { ...plan, refused: 'The new name is the old one.' };
 
-  const declarations = await findSymbol(root, from, 50);
+  const tooBig = (budget: ScanBudget): RenamePlan | undefined =>
+    budget.skipped
+      ? {
+          ...plan,
+          changes: [],
+          refused:
+            `The project has more than ${budget.max} code files, so a rename by name could miss uses. ` +
+            'Rename it in your IDE, or run from a narrower --root (or raise AGENT_MEMORY_MAX_FILES).'
+        }
+      : undefined;
+
+  const declarationScan = scanBudget(options.maxFiles);
+  const declarations = await findSymbol(root, from, 50, declarationScan);
+  const partial = tooBig(declarationScan);
+  if (partial) return partial;
   if (declarations.length === 0) return { ...plan, refused: `${from} is not declared anywhere in the project.` };
   if (declarations.length > 1) {
     return {
@@ -457,12 +518,13 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
         'A rename by name cannot tell their uses apart; rename them by hand.'
     };
   }
-  if ((await findSymbol(root, to, 1)).length > 0) return { ...plan, refused: `${to} is already declared in the project.` };
+  if ((await findSymbol(root, to, 1, scanBudget(options.maxFiles))).length > 0) return { ...plan, refused: `${to} is already declared in the project.` };
   plan.declaration = declarations[0];
 
   const word = wholeWord(from, 'g');
   const touched = new Map<string, number[]>();
-  for await (const { file, source } of codeSources(root)) {
+  const useScan = scanBudget(options.maxFiles);
+  for await (const { file, source } of codeSources(root, useScan)) {
     if (!source.includes(from)) continue;
     const lines = source.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
@@ -474,6 +536,9 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
       touched.set(file, [...(touched.get(file) ?? []), i]);
     }
   }
+  // Checked again on the pass that collects the uses: the project may have grown since the first.
+  const missed = tooBig(useScan);
+  if (missed) return missed;
   if (!options.apply) return plan;
 
   const base = path.resolve(root);
@@ -481,7 +546,7 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
     const rel = path.relative(base, file);
     const lockName = createHash('sha1').update(rel.toLowerCase()).digest('hex').slice(0, 16);
     await withFileLock(path.join(resolvePaths(base).locksDir, `edit-${lockName}.lock`), async () => {
-      const source = await readFile(file, 'utf8');
+      const { text: source, encoding } = await readSource(file);
       const eol = source.includes('\r\n') ? '\r\n' : '\n';
       const lines = source.split(/\r?\n/);
       for (const i of lineNumbers) lines[i] = renameInLine(lines[i], maskLiterals(lines[i]), word, to);
@@ -491,7 +556,8 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
       if (broken && !(await syntaxProblem(relPosix, source, base))) {
         throw new Error(`Rename stopped at ${relPosix}: it would break the syntax at line ${broken.line ?? '?'} (${broken.message}). Files before it were renamed.`);
       }
-      await atomicWrite(file, next);
+      // The new name is ASCII, so any encoding holds it.
+      await atomicWrite(file, encodeSource(next, encoding));
     });
   }
   return { ...plan, applied: true };

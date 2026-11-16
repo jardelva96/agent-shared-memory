@@ -159,11 +159,16 @@ Todo número vem da pasta `bench/` e pode ser medido de novo:
 - **Editar por símbolo, com segurança.** `memory_replace_symbol` troca uma função, método ou
   classe no lugar. O arquivo é relido sob trava na hora da edição, então dois agentes mudando
   duas funções do mesmo arquivo mantêm os dois trabalhos, e uma edição que quebraria a sintaxe
-  do arquivo é recusada com a linha do erro, antes de gravar qualquer coisa.
+  do arquivo é recusada com a linha do erro, antes de gravar qualquer coisa. Um arquivo que não é
+  UTF-8 (código legado em Windows-1252) é lido com os acentos e gravado de volta no próprio
+  encoding, com cada byte que a edição não mudou igual ao que era; texto novo que esse encoding não
+  comporta é recusado.
 - **Ler por símbolo, sem servidor de linguagem.** `symbols <arquivo>`, `find <Nome|Tipo.membro>`,
   `refs <Nome>`, `rename <Nome> <NovoNome>` (mostra o plano antes; `--apply` grava) e
   `memory_read_pointer "arquivo::Tipo.membro"`. Funciona em TypeScript, JavaScript, Python, C#,
-  Java, Go e outras, sem instalar mais nada.
+  Java, Go e outras, sem instalar mais nada. Uma busca no projeto lê até 20.000 arquivos de código
+  (`AGENT_MEMORY_MAX_FILES` muda isso); passando disso, find e refs avisam que a resposta pode estar
+  incompleta, e o rename se recusa a começar.
 - **Vários computadores, ao vivo.** `agent-memory hub` compartilha uma memória pela rede, com
   senha; nos outros computadores, defina `AGENT_MEMORY_REMOTE` e `AGENT_MEMORY_TOKEN`. Um
   arquivo reservado num computador é barrado no outro na mesma hora. O código continua sendo
@@ -701,6 +706,18 @@ agent-memory serve            # painel em http://127.0.0.1:4317
 ```
 
 Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `--agent`: `AGENT-01`, `AGENT-02`, `AGENT-03`. Nada mais precisa ser coordenado: o `.agents/` é o ponto de encontro, e a detecção de sobreposição, as mensagens e o painel funcionam entre processos independentes.
+
+### Só leitura: um agente, menos tokens
+
+Trabalhando sozinho, você pode querer só a leitura por símbolo: sem coordenação e sem gravar nada no
+projeto. `--read-only` oferece apenas `memory_symbols`, `memory_read_pointer`, `memory_find_symbol` e
+`memory_references`, com cinco linhas de instrução no lugar do ciclo READ -> INTENT -> CODE ->
+RESULT (cujas chamadas também custam tokens). Não precisa de `agent-memory init` nem aceita
+`--agent`; edite com as ferramentas de sempre.
+
+```bash
+claude mcp add codigo-por-simbolo -- agent-memory mcp --read-only --root /caminho/meu-backend
+```
 
 ### Ferramentas expostas
 

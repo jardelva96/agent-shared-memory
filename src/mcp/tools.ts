@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { configExists } from '../core/config.js';
 import { extractSymbol } from '../core/extract.js';
@@ -7,7 +7,8 @@ import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
 import { dependenciesOf } from '../core/tasks.js';
-import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../core/symbols.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols, partialSearch, renameSymbol, scanBudget } from '../core/symbols.js';
+import { readSource } from '../core/sourcefile.js';
 import { isRemote } from '../remote/client.js';
 import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
 import { INVALID_PARAMS, RpcError } from './jsonrpc.js';
@@ -29,6 +30,9 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
 }
+
+/** The tools that only read code. They need no .agents/, and they are all `mcp --read-only` offers. */
+export const CODE_READING_TOOLS: ReadonlySet<string> = new Set(['memory_symbols', 'memory_read_pointer', 'memory_find_symbol', 'memory_references']);
 
 /**
  * When the server is started with --agent, the id is fixed for the whole connection and the `agent`
@@ -466,7 +470,8 @@ export async function callTool(
   args: Record<string, unknown>,
   pinnedAgent?: string
 ): Promise<string> {
-  if (!isRemote(service) && !(await configExists(service.root))) {
+  // Reading code writes nothing, so it does not wait for init.
+  if (!CODE_READING_TOOLS.has(name) && !isRemote(service) && !(await configExists(service.root))) {
     throw new Error(
       `No .agents/ found in ${service.root}. Run "agent-memory init" in the project root, or start the server with --root PATH.`
     );
@@ -619,19 +624,21 @@ export async function callTool(
     case 'memory_symbols': {
       const file = requiredString(args, 'file');
       const target = insideRoot(service.root, file);
-      const entries = outlineSymbols(await readFile(target, 'utf8'), file);
+      const entries = outlineSymbols((await readSource(target)).text, file);
       if (entries.length === 0) return `No declarations recognised in ${file}. Read it with memory_read_pointer "${file}".`;
       return entries.map(e => `${e.declarationLine}-${e.endLine} ${e.kind} ${e.container ? `${e.container}.` : ''}${e.name}`).join('\n');
     }
     case 'memory_find_symbol': {
-      const matches = await findSymbol(service.root, requiredString(args, 'name'));
-      if (matches.length === 0) return 'Not found. Try memory_references, or a shorter name.';
-      return matches.map(m => `${m.pointer} (${m.kind}, lines ${m.declarationLine}-${m.endLine})`).join('\n');
+      const scan = scanBudget();
+      const matches = await findSymbol(service.root, requiredString(args, 'name'), 20, scan);
+      if (matches.length === 0) return `Not found. Try memory_references, or a shorter name.${partialSearch(scan)}`;
+      return matches.map(m => `${m.pointer} (${m.kind}, lines ${m.declarationLine}-${m.endLine})`).join('\n') + partialSearch(scan);
     }
     case 'memory_references': {
-      const refs = await findReferences(service.root, requiredString(args, 'name'));
-      if (refs.length === 0) return 'No uses found outside its declaration.';
-      return refs.map(r => `${r.file}:${r.line}  ${r.text}`).join('\n');
+      const scan = scanBudget();
+      const refs = await findReferences(service.root, requiredString(args, 'name'), 100, scan);
+      if (refs.length === 0) return `No uses found outside its declaration.${partialSearch(scan)}`;
+      return refs.map(r => `${r.file}:${r.line}  ${r.text}`).join('\n') + partialSearch(scan);
     }
     case 'memory_replace_symbol':
     case 'memory_insert_symbol': {
@@ -653,7 +660,8 @@ export async function callTool(
           pointer: { file: result.file, symbol: result.symbol }
         });
       }
-      return `${mode === 'replace' ? 'Replaced' : 'Inserted'} at ${result.file} lines ${result.fromLine}-${result.toLine}${result.removedLines ? ` (was ${result.removedLines} lines)` : ''}.`;
+      const kept = result.encoding === 'utf8' ? '' : ' The file stays in Windows-1252.';
+      return `${mode === 'replace' ? 'Replaced' : 'Inserted'} at ${result.file} lines ${result.fromLine}-${result.toLine}${result.removedLines ? ` (was ${result.removedLines} lines)` : ''}.${kept}`;
     }
     case 'memory_remember': {
       const fact = await service.remember(requiredString(args, 'fact'), agentId());
@@ -840,7 +848,7 @@ async function readPointerText(service: AgentMemoryService, raw: string): Promis
         throw new Error(`${pointer.file} is ${Math.round(info.size / 1024)}kB. Point at a symbol to read part of it.`);
       }
     }
-    source = await readFile(target, 'utf8');
+    source = (await readSource(target)).text;
   } catch (error) {
     throw new Error(`Cannot read ${pointer.file}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -852,6 +860,13 @@ async function readPointerText(service: AgentMemoryService, raw: string): Promis
     return (
       `Symbol ${JSON.stringify(pointer.symbol)} was not found in ${pointer.file}. ` +
       'Read the file to check the spelling.'
+    );
+  }
+  if (found.continuesTo) {
+    return (
+      `${pointer.file}:${found.startLine}-${found.endLine} (${pointer.symbol}, cut: it goes on to line ${found.continuesTo}. ` +
+      'List its members with memory_symbols and read them one at a time.)\n\n' +
+      found.text
     );
   }
   return `${pointer.file}:${found.startLine}-${found.endLine} (${pointer.symbol})\n\n${found.text}`;

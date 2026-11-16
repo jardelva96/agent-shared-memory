@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../src/core/symbols.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol, scanBudget } from '../src/core/symbols.js';
 import { extractSymbol } from '../src/core/extract.js';
 
 async function withProject(files: Record<string, string>, fn: (root: string) => Promise<void>): Promise<void> {
@@ -224,4 +224,115 @@ test('rename changes the whole word only, never part of a longer name', async ()
       assert.doesNotMatch(m, /subsum|sums/);
     }
   );
+});
+
+/** A C# class of `count` five-line methods: 100 of them run past the 400-line read limit. */
+function longClass(count: number): string {
+  const methods = Array.from({ length: count }, (_, i) => [`    public int M${i}()`, '    {', `        return ${i};`, '    }', ''].join('\n'));
+  return ['namespace Loja', '{', '    public class Grande', '    {', ...methods, '    }', '}', ''].join('\n');
+}
+
+test('a type longer than the read limit is listed with its real end', () => {
+  // Seen on a 1,863-line C# service: the class was listed as lines 20-419, its methods up to 1,133.
+  const outline = outlineSymbols(longClass(100), 'Grande.cs');
+  assert.equal(outline.find(e => e.name === 'Grande')!.endLine, 505);
+  assert.equal(outline.find(e => e.name === 'M99')!.endLine, 503);
+});
+
+test('inserting after a type longer than the read limit puts the code after it, not inside it', async () => {
+  await withProject({ 'src/Grande.cs': longClass(100) }, async root => {
+    await editSymbol(root, 'src/Grande.cs::Grande', 'public class Depois\n{\n}', 'insert_after');
+    const lines = (await readFile(path.join(root, 'src/Grande.cs'), 'utf8')).split('\n');
+    assert.equal(lines[504], '    }', 'Grande still closes where it did');
+    assert.equal(lines.indexOf('    public class Depois'), 506, 'the new type comes after it, past one blank line');
+  });
+});
+
+test('replacing a method longer than the read limit replaces all of it', async () => {
+  const body = Array.from({ length: 450 }, (_, i) => `        var v${i} = ${i};`);
+  const source = ['public class Caixa', '{', '    public int Soma()', '    {', ...body, '        return 0;', '    }', '', '    public int Outro() { return 1; }', '}', ''].join('\n');
+  await withProject({ 'src/Caixa.cs': source }, async root => {
+    const result = await editSymbol(root, 'src/Caixa.cs::Caixa.Soma', 'public int Soma()\n{\n    return 1;\n}');
+    assert.equal(result.removedLines, 454);
+    const after = await readFile(path.join(root, 'src/Caixa.cs'), 'utf8');
+    assert.equal(after, ['public class Caixa', '{', '    public int Soma()', '    {', '        return 1;', '    }', '', '    public int Outro() { return 1; }', '}', ''].join('\n'));
+  });
+});
+
+// Legacy C# saved as Windows-1252: "ç", "ã" and "é" are one byte each, and not valid UTF-8.
+const PEDIDO_1252 = [
+  'public class Pedido',
+  '{',
+  '    // Atenção: cálculo do preço',
+  '    public string Situacao() { return "Não pago"; }',
+  '',
+  '    public int Total()',
+  '    {',
+  '        return 0;',
+  '    }',
+  '}',
+  ''
+].join('\r\n');
+
+test('a Windows-1252 file is edited in Windows-1252, and every byte the edit did not change stays', async () => {
+  await withProject({}, async root => {
+    const file = path.join(root, 'Pedido.cs');
+    await writeFile(file, Buffer.from(PEDIDO_1252, 'latin1'));
+    const result = await editSymbol(root, 'Pedido.cs::Pedido.Total', 'public int Total()\n{\n    return 42; // preço em €\n}');
+    assert.equal(result.encoding, 'windows-1252');
+    // € is byte 0x80 in Windows-1252.
+    const expected = PEDIDO_1252.replace('        return 0;', '        return 42; // preço em \x80');
+    assert.deepEqual(await readFile(file), Buffer.from(expected, 'latin1'), 'read as UTF-8, the accents of line 3 came back as U+FFFD');
+  });
+});
+
+test('new text that Windows-1252 cannot hold is refused, and the file is left as it was', async () => {
+  await withProject({}, async root => {
+    const file = path.join(root, 'Pedido.cs');
+    await writeFile(file, Buffer.from(PEDIDO_1252, 'latin1'));
+    await assert.rejects(
+      editSymbol(root, 'Pedido.cs::Pedido.Total', 'public int Total()\n{\n    return 0; // a → b\n}'),
+      /"→" \(U\+2192\) on line 8 of the new text has no byte in Windows-1252/
+    );
+    assert.deepEqual(await readFile(file), Buffer.from(PEDIDO_1252, 'latin1'));
+  });
+});
+
+test('a rename keeps a Windows-1252 file in Windows-1252', async () => {
+  await withProject({}, async root => {
+    await writeFile(path.join(root, 'Pedido.cs'), Buffer.from(PEDIDO_1252, 'latin1'));
+    await writeFile(path.join(root, 'Uso.cs'), Buffer.from('// situação\r\nvar s = new Pedido().Situacao();\r\n', 'latin1'));
+    await renameSymbol(root, 'Situacao', 'Estado', { apply: true });
+    assert.deepEqual(await readFile(path.join(root, 'Pedido.cs')), Buffer.from(PEDIDO_1252.replace('Situacao', 'Estado'), 'latin1'));
+    assert.deepEqual(await readFile(path.join(root, 'Uso.cs')), Buffer.from('// situação\r\nvar s = new Pedido().Estado();\r\n', 'latin1'));
+  });
+});
+
+test('a UTF-8 file keeps its BOM through an edit', async () => {
+  await withProject({}, async root => {
+    const file = path.join(root, 'A.cs');
+    await writeFile(file, '﻿public class A\n{\n    public int B() { return 1; }\n}\n', 'utf8');
+    const result = await editSymbol(root, 'A.cs::A.B', 'public int B() { return 2; }');
+    assert.equal(result.encoding, 'utf8');
+    assert.equal(await readFile(file, 'utf8'), '﻿public class A\n{\n    public int B() { return 2; }\n}\n');
+  });
+});
+
+test('a search that stops at the file limit says so, and a rename then refuses to start', async () => {
+  // Seen on a 52,000-file codebase: past the limit, find answered "not found" for code that was there.
+  await withProject({ 'src/a.ts': 'export function alvo() {}\n', 'src/b.ts': 'alvo();\n', 'src/c.ts': 'alvo();\n' }, async root => {
+    const whole = scanBudget(3);
+    assert.equal((await findReferences(root, 'alvo', 100, whole)).length, 2);
+    assert.ok(!whole.skipped, 'three files fit a limit of three');
+
+    const cut = scanBudget(2);
+    assert.deepEqual((await findReferences(root, 'alvo', 100, cut)).map(r => r.file), ['src/b.ts']);
+    assert.equal(cut.skipped, true);
+
+    const plan = await renameSymbol(root, 'alvo', 'outro', { apply: true, maxFiles: 2 });
+    assert.match(plan.refused!, /more than 2 code files/);
+    assert.equal(plan.applied, false);
+    assert.equal(await readFile(path.join(root, 'src/c.ts'), 'utf8'), 'alvo();\n', 'a rename that misses uses breaks the build');
+    assert.equal(await readFile(path.join(root, 'src/a.ts'), 'utf8'), 'export function alvo() {}\n');
+  });
 });

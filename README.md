@@ -161,11 +161,15 @@ Every number comes from the `bench/` folder and can be run again:
 - **Edit by symbol, safely.** `memory_replace_symbol` changes one function, method or class in
   place. The file is re-read under a lock when the edit applies, so two agents changing two
   functions of one file both keep their work, and an edit that would break the file's syntax is
-  refused with the line, before anything is written.
+  refused with the line, before anything is written. A file that is not UTF-8 (legacy
+  Windows-1252 code) is read with its accents and written back in its own encoding, every byte the
+  edit did not change as it was; new text that encoding cannot hold is refused.
 - **Read by symbol, without a language server.** `symbols <file>`, `find <Name|Type.member>`,
   `refs <Name>`, `rename <Name> <NewName>` (a plan first, `--apply` to write), and
   `memory_read_pointer "file::Type.member"`. Works in TypeScript, JavaScript, Python, C#, Java,
-  Go and more, with nothing else installed.
+  Go and more, with nothing else installed. A project-wide search reads up to 20,000 code files
+  (`AGENT_MEMORY_MAX_FILES` changes it); past that, find and refs say the answer may be
+  incomplete, and rename refuses to start.
 - **Several machines, live.** `agent-memory hub` shares one memory over the network with a
   token; on the other machines set `AGENT_MEMORY_REMOTE` and `AGENT_MEMORY_TOKEN`. A file
   reserved on one machine is refused on another the moment it is granted. Code is still read
@@ -622,6 +626,18 @@ Most MCP clients use this `.mcp.json` shape:
     }
   }
 }
+```
+
+### Read-only: one agent, fewer tokens
+
+Working alone, you may want only the reading by symbol: no coordination, nothing written to the
+project. `--read-only` offers just `memory_symbols`, `memory_read_pointer`, `memory_find_symbol` and
+`memory_references`, with five lines of instructions instead of the READ -> INTENT -> CODE ->
+RESULT cycle (whose calls cost tokens too). It needs no `agent-memory init` and takes no `--agent`;
+edit with your usual tools.
+
+```bash
+claude mcp add code-by-symbol -- agent-memory mcp --read-only --root /path/to/my-backend
 ```
 
 ### Exposed Tools

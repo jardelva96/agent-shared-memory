@@ -26,6 +26,65 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-16: in a 52,000-file codebase, find answered "not found" for code it never read
+
+What happened: a legacy monorepo with about 52,000 code files. Walking it in name order, the search
+spent its 20,000-file limit on the first folders and never reached `Source/`, where most of the
+code is.
+
+Why the tool allowed it: the limit stopped the walk without a word. `memory_find_symbol` and
+`memory_references` answered as if they had read the whole project, so "not found" or "no uses"
+could be wrong, and `rename --apply` would have renamed the uses it saw and left the rest, breaking
+the build.
+
+Fix: the search notes whether a code file was left out. find and refs then say the answer may be
+incomplete and how to narrow it (`--root`, `AGENT_MEMORY_MAX_FILES`), and rename refuses to start.
+Unreleased.
+
+Test: `a search that stops at the file limit says so, and a rename then refuses to start`
+(symbols.test.ts), `a search that stops at the file limit says the answer may be incomplete`
+(mcp.test.ts).
+
+## 2026-11-16: an edit by symbol would have destroyed every accent of a Windows-1252 file
+
+What happened: a legacy C# codebase keeps many files in Windows-1252. The project's own Claude Code
+hook converts a file to UTF-8 before the Read tool opens it, but the MCP tools read the file
+themselves and never went through that hook.
+
+Why the tool allowed it: every source file was read as UTF-8, so each accented letter of a
+Windows-1252 file became U+FFFD. Reads showed `N�o` instead of `Não`, and `memory_replace_symbol`
+wrote the whole file back as UTF-8: the accents of every line, including the ones the edit never
+touched, were gone for good.
+
+Fix: a file that is not valid UTF-8 is read as Windows-1252 and written back in it. That mapping
+covers all 256 byte values one to one, so every byte the edit did not change comes back as it was,
+whatever the real code page; new text with a character Windows-1252 cannot hold is refused. A UTF-8
+BOM is kept. Unreleased.
+
+Test: `a Windows-1252 file is edited in Windows-1252, and every byte the edit did not change stays`,
+`new text that Windows-1252 cannot hold is refused, and the file is left as it was`, `a rename keeps
+a Windows-1252 file in Windows-1252`, `a UTF-8 file keeps its BOM through an edit`
+(symbols.test.ts), `a pointer into a Windows-1252 file reads its accents` (mcp.test.ts).
+
+## 2026-11-16: a long class was listed, and edited, as if it ended at its 400th line
+
+What happened: reading a legacy C# service by symbol (one class, 1,863 lines), `symbols` listed the
+class as lines 20-419 while listing its own methods down to line 1,133.
+
+Why the tool allowed it: every symbol was cut at 400 lines, a limit meant only for how much one
+read returns. The outline reported the cut as the end of the class. `memory_replace_symbol` on a
+symbol longer than that replaced its first 400 lines and left the rest behind (the syntax check then
+refused it), and `memory_insert_symbol` after a longer type put the new code inside it, where a
+balanced block still parses and nothing refused it.
+
+Fix: listing and editing always use the whole symbol. A read of a symbol longer than 400 lines says
+it was cut and on which line the symbol really ends. Unreleased.
+
+Test: `a type longer than the read limit is listed with its real end`, `inserting after a type
+longer than the read limit puts the code after it, not inside it`, `replacing a method longer than
+the read limit replaces all of it` (symbols.test.ts), `a pointer to a symbol longer than the read
+limit says it was cut and where it ends` (mcp.test.ts).
+
 ## 2026-11-08: `run --once` meant for one task ran the whole queue
 
 What happened: `run --agent MAGNET --once` was started to run one task. It ran all three ready

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AgentMemoryService } from '../src/core/service.js';
-import { createMcpMethods, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/server.js';
+import { createMcpMethods, SERVER_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/server.js';
 import { MethodMap } from '../src/mcp/jsonrpc.js';
 import { TOOLS } from '../src/mcp/tools.js';
 
@@ -330,5 +331,96 @@ test('a symbol that is not there says so instead of guessing', async () => {
     const missing = (await call('memory_read_pointer', { pointer: 'app.ts::naoExiste' })).content[0].text;
     assert.match(missing, /not found/, 'a wrong slice would be worse than no slice');
     assert.match(missing, /Read the file/);
+  });
+});
+
+test('a pointer to a symbol longer than the read limit says it was cut and where it ends', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    const members = Array.from({ length: 450 }, (_, i) => `    public int M${i}() { return ${i}; }`);
+    await writeFile(path.join(service.root, 'Grande.cs'), ['public class Grande', '{', ...members, '}', ''].join('\n'));
+
+    const text = (await call('memory_read_pointer', { pointer: 'Grande.cs::Grande' })).content[0].text;
+    assert.match(text, /^Grande\.cs:1-400 \(Grande, cut: it goes on to line 453\./, 'a cut read must not pass for the whole symbol');
+    assert.match(text, /memory_symbols/, 'and it says how to read the rest');
+    assert.doesNotMatch(text, /M449/);
+  });
+});
+
+test('a pointer into a Windows-1252 file reads its accents', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    const source = 'public class Pedido\r\n{\r\n    public string Situacao() { return "Não pago"; }\r\n}\r\n';
+    await writeFile(path.join(service.root, 'Pedido.cs'), Buffer.from(source, 'latin1'));
+    const text = (await call('memory_read_pointer', { pointer: 'Pedido.cs::Pedido.Situacao' })).content[0].text;
+    assert.match(text, /"Não pago"/);
+    assert.doesNotMatch(text, /�/, 'not a replacement character where the accent was');
+  });
+});
+
+test('a search that stops at the file limit says the answer may be incomplete', async () => {
+  const saved = process.env.AGENT_MEMORY_MAX_FILES;
+  process.env.AGENT_MEMORY_MAX_FILES = '1';
+  try {
+    await withServer(async (call, _methods, service) => {
+      await service.init('Limit');
+      await writeFile(path.join(service.root, 'a.ts'), 'export function alvo() {}\n');
+      await writeFile(path.join(service.root, 'b.ts'), 'alvo();\n');
+      const found = (await call('memory_find_symbol', { name: 'alvo' })).content[0].text;
+      assert.match(found, /^a\.ts::alvo/);
+      assert.match(found, /Searched only the first 1 code files/);
+      const missing = (await call('memory_references', { name: 'alvo' })).content[0].text;
+      assert.match(missing, /^No uses found[^]*Searched only the first 1 code files/, 'a "no uses" past the limit is not the truth');
+    });
+  } finally {
+    if (saved === undefined) delete process.env.AGENT_MEMORY_MAX_FILES;
+    else process.env.AGENT_MEMORY_MAX_FILES = saved;
+  }
+});
+
+test('the server reports the version of the package', async () => {
+  // dist/ cannot read package.json at startup, so the number is copied, and 1.5.0 shipped saying 1.4.0.
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  assert.equal(SERVER_VERSION, pkg.version);
+  await withServer(async (_call, methods) => {
+    const init = (await methods.get('initialize')!({})) as { serverInfo: { version: string } };
+    assert.equal(init.serverInfo.version, pkg.version);
+  });
+});
+
+test('a read-only server offers only the code-reading tools, needs no init and writes nothing', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-ro-'));
+  try {
+    await writeFile(path.join(root, 'app.ts'), 'export function alvo() {\n  return 1;\n}\nalvo();\n');
+    const methods = createMcpMethods(new AgentMemoryService(root), { readOnly: true });
+    const call = async (name: string, args: Record<string, unknown>) => (await methods.get('tools/call')!({ name, arguments: args })) as ToolResult;
+
+    const init = (await methods.get('initialize')!({})) as { instructions: string };
+    assert.doesNotMatch(init.instructions, /INTENT|memory_record|memory_status/, 'no cycle to follow, and pay tokens for');
+    assert.match(init.instructions, /memory_read_pointer/);
+
+    const listed = (await methods.get('tools/list')!(undefined)) as { tools: Array<{ name: string }> };
+    assert.deepEqual(listed.tools.map(t => t.name).sort(), ['memory_find_symbol', 'memory_read_pointer', 'memory_references', 'memory_symbols']);
+
+    assert.match((await call('memory_symbols', { file: 'app.ts' })).content[0].text, /^1-3 function alvo/);
+    assert.match((await call('memory_read_pointer', { pointer: 'app.ts::alvo' })).content[0].text, /return 1;/);
+    assert.match((await call('memory_find_symbol', { name: 'alvo' })).content[0].text, /^app\.ts::alvo/);
+    assert.match((await call('memory_references', { name: 'alvo' })).content[0].text, /^app\.ts:4/);
+
+    await assert.rejects(call('memory_record', { type: 'NOTE', message: 'x' }), /Unknown tool/);
+    await assert.rejects(call('memory_replace_symbol', { agent: 'A', pointer: 'app.ts::alvo', code: 'x' }), /Unknown tool/);
+    assert.equal(existsSync(path.join(root, '.agents')), false, 'nothing written to the project');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('reading code by symbol does not wait for init on the full server either', async () => {
+  await withServer(async (call, _methods, service) => {
+    await writeFile(path.join(service.root, 'app.ts'), 'export const x = 1;\n');
+    const read = await call('memory_read_pointer', { pointer: 'app.ts::x' });
+    assert.notEqual(read.isError, true);
+    assert.match(read.content[0].text, /export const x = 1;/);
+    assert.match((await call('memory_register', { agent: 'A' })).content[0].text, /agent-memory init/, 'writing still does');
   });
 });

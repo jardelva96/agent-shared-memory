@@ -7,6 +7,8 @@ export interface ExtractedSymbol {
   /** 1-based: the line that names the symbol, after its doc comment and attributes. */
   declarationLine: number;
   endLine: number;
+  /** The symbol runs past the line limit: the text stops at endLine, the symbol goes on to this line. */
+  continuesTo?: number;
 }
 
 /** Words that can come before a declared name. */
@@ -270,13 +272,22 @@ function stripInline(line: string): string {
     .replace(/\/\/.*$/, '');
 }
 
+/** How much of one symbol a read returns. Listing and editing always use the whole symbol. */
 const MAX_LINES = 400;
 
-/** Returns the text of `symbol` within `source`, or undefined when it cannot be located. */
+/**
+ * Returns the text of `symbol` within `source`, or undefined when it cannot be located. A symbol
+ * longer than the read limit comes back cut, with `continuesTo` saying where it really ends.
+ */
 export function extractSymbol(source: string, symbol: string): ExtractedSymbol | undefined {
   const lines = source.split('\n');
   const best = findDeclaration(lines, symbol);
-  return best === undefined ? undefined : sliceAt(lines, best);
+  if (best === undefined) return undefined;
+  const slice = sliceAt(lines, best);
+  // endLine is 1-based and best 0-based: their difference is how many lines were taken.
+  if (slice.endLine - best < MAX_LINES) return slice;
+  const whole = sliceAt(lines, best, Infinity);
+  return whole.endLine > slice.endLine ? { ...slice, continuesTo: whole.endLine } : slice;
 }
 
 /** The 0-based line that declares `symbol`, or undefined. */
