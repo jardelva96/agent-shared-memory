@@ -1,7 +1,7 @@
 import { configExists } from '../core/config.js';
 import { AgentMemoryService } from '../core/service.js';
 import { INVALID_PARAMS, MethodMap, RpcError, StdioServer } from './jsonrpc.js';
-import { buildTools, callTool, ToolDefinition } from './tools.js';
+import { buildTools, callTool, CODE_READING_TOOLS, ToolDefinition } from './tools.js';
 import { isRemote } from '../remote/client.js';
 
 export const SERVER_NAME = 'agent-shared-memory';
@@ -25,15 +25,30 @@ const INSTRUCTIONS = [
   'When memory_status reports unread messages, call memory_inbox before continuing.'
 ].join('\n');
 
+/**
+ * For one agent that only wants to spend fewer tokens on reading code: no cycle to follow (each
+ * INTENT and CHANGED call costs tokens too) and no coordination tools in its context.
+ */
+const READ_ONLY_INSTRUCTIONS = [
+  'Read code by symbol instead of whole files:',
+  '- memory_symbols lists what a file declares, with line ranges, without reading it.',
+  '- memory_read_pointer "file::Type.member" returns just that symbol.',
+  '- memory_find_symbol and memory_references search the project by name.',
+  'These tools only read. Edit with your usual tools.'
+].join('\n');
+
 export interface McpOptions {
   /** Fixes the identity for this connection, removing `agent` from every tool schema. */
   agentId?: string;
+  /** Only the code-reading tools: no coordination, nothing written, no .agents/ needed. An agentId is ignored. */
+  readOnly?: boolean;
 }
 
 export function createMcpMethods(service: AgentMemoryService, options: McpOptions = {}): MethodMap {
   const methods: MethodMap = new Map();
-  const pinned = options.agentId;
-  const tools: ToolDefinition[] = buildTools(pinned);
+  const readOnly = options.readOnly === true;
+  const pinned = readOnly ? undefined : options.agentId;
+  const tools: ToolDefinition[] = readOnly ? buildTools().filter(tool => CODE_READING_TOOLS.has(tool.name)) : buildTools(pinned);
 
   methods.set('initialize', async params => {
     const requested = (params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
@@ -45,9 +60,11 @@ export function createMcpMethods(service: AgentMemoryService, options: McpOption
       protocolVersion,
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
-      instructions: pinned
-        ? `${INSTRUCTIONS}\n\nYou are ${pinned}. Your identity is fixed by this connection, so no tool takes an agent id.`
-        : INSTRUCTIONS
+      instructions: readOnly
+        ? READ_ONLY_INSTRUCTIONS
+        : pinned
+          ? `${INSTRUCTIONS}\n\nYou are ${pinned}. Your identity is fixed by this connection, so no tool takes an agent id.`
+          : INSTRUCTIONS
     };
   });
 
@@ -76,7 +93,8 @@ export function createMcpMethods(service: AgentMemoryService, options: McpOption
 }
 
 export async function startMcpServer(service: AgentMemoryService, options: McpOptions = {}): Promise<void> {
-  const pinned = options.agentId;
+  // A read-only server writes nothing, not even its own registration.
+  const pinned = options.readOnly ? undefined : options.agentId;
 
   if (pinned && (isRemote(service) || (await configExists(service.root)))) {
     // Register the pinned agent up front; a reconnect re-attaches to the same history.
@@ -92,7 +110,7 @@ export async function startMcpServer(service: AgentMemoryService, options: McpOp
   }
 
   new StdioServer(createMcpMethods(service, options)).start();
-  const who = pinned ? ` as ${pinned}` : '';
+  const who = options.readOnly ? ', read-only' : pinned ? ` as ${pinned}` : '';
   process.stderr.write(`${SERVER_NAME} ${SERVER_VERSION} listening on stdio${who} (root: ${service.root})\n`);
 }
 

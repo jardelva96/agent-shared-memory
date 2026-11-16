@@ -31,6 +31,9 @@ export interface ToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+/** The tools that only read code. They need no .agents/, and they are all `mcp --read-only` offers. */
+export const CODE_READING_TOOLS: ReadonlySet<string> = new Set(['memory_symbols', 'memory_read_pointer', 'memory_find_symbol', 'memory_references']);
+
 /**
  * When the server is started with --agent, the id is fixed for the whole connection and the `agent`
  * parameter disappears from every schema.
@@ -467,7 +470,8 @@ export async function callTool(
   args: Record<string, unknown>,
   pinnedAgent?: string
 ): Promise<string> {
-  if (!isRemote(service) && !(await configExists(service.root))) {
+  // Reading code writes nothing, so it does not wait for init.
+  if (!CODE_READING_TOOLS.has(name) && !isRemote(service) && !(await configExists(service.root))) {
     throw new Error(
       `No .agents/ found in ${service.root}. Run "agent-memory init" in the project root, or start the server with --root PATH.`
     );

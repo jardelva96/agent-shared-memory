@@ -707,6 +707,18 @@ agent-memory serve            # painel em http://127.0.0.1:4317
 
 Depois, cada agente sobe apontando para o mesmo repositório, mudando apenas o `--agent`: `AGENT-01`, `AGENT-02`, `AGENT-03`. Nada mais precisa ser coordenado: o `.agents/` é o ponto de encontro, e a detecção de sobreposição, as mensagens e o painel funcionam entre processos independentes.
 
+### Só leitura: um agente, menos tokens
+
+Trabalhando sozinho, você pode querer só a leitura por símbolo: sem coordenação e sem gravar nada no
+projeto. `--read-only` oferece apenas `memory_symbols`, `memory_read_pointer`, `memory_find_symbol` e
+`memory_references`, com cinco linhas de instrução no lugar do ciclo READ -> INTENT -> CODE ->
+RESULT (cujas chamadas também custam tokens). Não precisa de `agent-memory init` nem aceita
+`--agent`; edite com as ferramentas de sempre.
+
+```bash
+claude mcp add codigo-por-simbolo -- agent-memory mcp --read-only --root /caminho/meu-backend
+```
+
 ### Ferramentas expostas
 
 | Ferramenta | Uso |

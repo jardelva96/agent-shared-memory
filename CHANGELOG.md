@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `agent-memory mcp --read-only`: only the four code-reading tools (`memory_symbols`,
+  `memory_read_pointer`, `memory_find_symbol`, `memory_references`) and five lines of instructions
+  in place of the READ -> INTENT -> CODE -> RESULT cycle. For one agent that wants fewer tokens:
+  nothing is written, no `init` is needed, and `--agent` is refused. On the full server too, the
+  code-reading tools no longer wait for `init`.
 - A symbol longer than 400 lines is listed with its real range, and `memory_replace_symbol` /
   `memory_insert_symbol` work on all of it: before, a replace left its tail behind and an insert
   after a long type landed inside it. `memory_read_pointer` still returns at most 400 lines, and now

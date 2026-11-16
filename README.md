@@ -628,6 +628,18 @@ Most MCP clients use this `.mcp.json` shape:
 }
 ```
 
+### Read-only: one agent, fewer tokens
+
+Working alone, you may want only the reading by symbol: no coordination, nothing written to the
+project. `--read-only` offers just `memory_symbols`, `memory_read_pointer`, `memory_find_symbol` and
+`memory_references`, with five lines of instructions instead of the READ -> INTENT -> CODE ->
+RESULT cycle (whose calls cost tokens too). It needs no `agent-memory init` and takes no `--agent`;
+edit with your usual tools.
+
+```bash
+claude mcp add code-by-symbol -- agent-memory mcp --read-only --root /path/to/my-backend
+```
+
 ### Exposed Tools
 
 | Tool | Use |

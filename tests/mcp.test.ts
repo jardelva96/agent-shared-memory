@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AgentMemoryService } from '../src/core/service.js';
@@ -384,5 +385,42 @@ test('the server reports the version of the package', async () => {
   await withServer(async (_call, methods) => {
     const init = (await methods.get('initialize')!({})) as { serverInfo: { version: string } };
     assert.equal(init.serverInfo.version, pkg.version);
+  });
+});
+
+test('a read-only server offers only the code-reading tools, needs no init and writes nothing', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asm-ro-'));
+  try {
+    await writeFile(path.join(root, 'app.ts'), 'export function alvo() {\n  return 1;\n}\nalvo();\n');
+    const methods = createMcpMethods(new AgentMemoryService(root), { readOnly: true });
+    const call = async (name: string, args: Record<string, unknown>) => (await methods.get('tools/call')!({ name, arguments: args })) as ToolResult;
+
+    const init = (await methods.get('initialize')!({})) as { instructions: string };
+    assert.doesNotMatch(init.instructions, /INTENT|memory_record|memory_status/, 'no cycle to follow, and pay tokens for');
+    assert.match(init.instructions, /memory_read_pointer/);
+
+    const listed = (await methods.get('tools/list')!(undefined)) as { tools: Array<{ name: string }> };
+    assert.deepEqual(listed.tools.map(t => t.name).sort(), ['memory_find_symbol', 'memory_read_pointer', 'memory_references', 'memory_symbols']);
+
+    assert.match((await call('memory_symbols', { file: 'app.ts' })).content[0].text, /^1-3 function alvo/);
+    assert.match((await call('memory_read_pointer', { pointer: 'app.ts::alvo' })).content[0].text, /return 1;/);
+    assert.match((await call('memory_find_symbol', { name: 'alvo' })).content[0].text, /^app\.ts::alvo/);
+    assert.match((await call('memory_references', { name: 'alvo' })).content[0].text, /^app\.ts:4/);
+
+    await assert.rejects(call('memory_record', { type: 'NOTE', message: 'x' }), /Unknown tool/);
+    await assert.rejects(call('memory_replace_symbol', { agent: 'A', pointer: 'app.ts::alvo', code: 'x' }), /Unknown tool/);
+    assert.equal(existsSync(path.join(root, '.agents')), false, 'nothing written to the project');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('reading code by symbol does not wait for init on the full server either', async () => {
+  await withServer(async (call, _methods, service) => {
+    await writeFile(path.join(service.root, 'app.ts'), 'export const x = 1;\n');
+    const read = await call('memory_read_pointer', { pointer: 'app.ts::x' });
+    assert.notEqual(read.isError, true);
+    assert.match(read.content[0].text, /export const x = 1;/);
+    assert.match((await call('memory_register', { agent: 'A' })).content[0].text, /agent-memory init/, 'writing still does');
   });
 });
