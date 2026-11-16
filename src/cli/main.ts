@@ -639,20 +639,25 @@ async function main(): Promise<void> {
     }
 
     case 'find': {
-      const { findSymbol } = await import('../core/symbols.js');
-      const matches = await findSymbol(root, required(parsed.positionals[0], 'a symbol name'));
+      const { findSymbol, partialSearch, scanBudget } = await import('../core/symbols.js');
+      const scan = scanBudget();
+      const matches = await findSymbol(root, required(parsed.positionals[0], 'a symbol name'), 20, scan);
       if (parsed.flags.json) console.log(JSON.stringify(matches, null, 2));
       else if (matches.length === 0) console.log('Not found.');
       else for (const m of matches) console.log(`${m.pointer}  (${m.kind}, lines ${m.declarationLine}-${m.endLine})`);
+      // On stderr, so --json output stays valid JSON.
+      if (scan.skipped) console.error(partialSearch(scan).trim());
       break;
     }
 
     case 'refs': {
-      const { findReferences } = await import('../core/symbols.js');
-      const refs = await findReferences(root, required(parsed.positionals[0], 'a symbol name'));
+      const { findReferences, partialSearch, scanBudget } = await import('../core/symbols.js');
+      const scan = scanBudget();
+      const refs = await findReferences(root, required(parsed.positionals[0], 'a symbol name'), 100, scan);
       if (parsed.flags.json) console.log(JSON.stringify(refs, null, 2));
       else if (refs.length === 0) console.log('No uses found.');
       else for (const r of refs) console.log(`${r.file}:${r.line}  ${r.text}`);
+      if (scan.skipped) console.error(partialSearch(scan).trim());
       break;
     }
 

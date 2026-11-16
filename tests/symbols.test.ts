@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../src/core/symbols.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol, scanBudget } from '../src/core/symbols.js';
 import { extractSymbol } from '../src/core/extract.js';
 
 async function withProject(files: Record<string, string>, fn: (root: string) => Promise<void>): Promise<void> {
@@ -315,5 +315,24 @@ test('a UTF-8 file keeps its BOM through an edit', async () => {
     const result = await editSymbol(root, 'A.cs::A.B', 'public int B() { return 2; }');
     assert.equal(result.encoding, 'utf8');
     assert.equal(await readFile(file, 'utf8'), '﻿public class A\n{\n    public int B() { return 2; }\n}\n');
+  });
+});
+
+test('a search that stops at the file limit says so, and a rename then refuses to start', async () => {
+  // Seen on a 52,000-file codebase: past the limit, find answered "not found" for code that was there.
+  await withProject({ 'src/a.ts': 'export function alvo() {}\n', 'src/b.ts': 'alvo();\n', 'src/c.ts': 'alvo();\n' }, async root => {
+    const whole = scanBudget(3);
+    assert.equal((await findReferences(root, 'alvo', 100, whole)).length, 2);
+    assert.ok(!whole.skipped, 'three files fit a limit of three');
+
+    const cut = scanBudget(2);
+    assert.deepEqual((await findReferences(root, 'alvo', 100, cut)).map(r => r.file), ['src/b.ts']);
+    assert.equal(cut.skipped, true);
+
+    const plan = await renameSymbol(root, 'alvo', 'outro', { apply: true, maxFiles: 2 });
+    assert.match(plan.refused!, /more than 2 code files/);
+    assert.equal(plan.applied, false);
+    assert.equal(await readFile(path.join(root, 'src/c.ts'), 'utf8'), 'alvo();\n', 'a rename that misses uses breaks the build');
+    assert.equal(await readFile(path.join(root, 'src/a.ts'), 'utf8'), 'export function alvo() {}\n');
   });
 });

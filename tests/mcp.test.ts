@@ -356,3 +356,23 @@ test('a pointer into a Windows-1252 file reads its accents', async () => {
     assert.doesNotMatch(text, /�/, 'not a replacement character where the accent was');
   });
 });
+
+test('a search that stops at the file limit says the answer may be incomplete', async () => {
+  const saved = process.env.AGENT_MEMORY_MAX_FILES;
+  process.env.AGENT_MEMORY_MAX_FILES = '1';
+  try {
+    await withServer(async (call, _methods, service) => {
+      await service.init('Limit');
+      await writeFile(path.join(service.root, 'a.ts'), 'export function alvo() {}\n');
+      await writeFile(path.join(service.root, 'b.ts'), 'alvo();\n');
+      const found = (await call('memory_find_symbol', { name: 'alvo' })).content[0].text;
+      assert.match(found, /^a\.ts::alvo/);
+      assert.match(found, /Searched only the first 1 code files/);
+      const missing = (await call('memory_references', { name: 'alvo' })).content[0].text;
+      assert.match(missing, /^No uses found[^]*Searched only the first 1 code files/, 'a "no uses" past the limit is not the truth');
+    });
+  } finally {
+    if (saved === undefined) delete process.env.AGENT_MEMORY_MAX_FILES;
+    else process.env.AGENT_MEMORY_MAX_FILES = saved;
+  }
+});

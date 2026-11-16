@@ -10,6 +10,10 @@
   accents (they came back as U+FFFD), and `memory_replace_symbol`, `memory_insert_symbol` and
   `rename` write it back in Windows-1252, every byte the edit did not change as it was. New text
   with a character Windows-1252 cannot hold is refused, naming it and its line. A UTF-8 BOM stays.
+- A project-wide search that stops at its file limit (20,000 code files; `AGENT_MEMORY_MAX_FILES`
+  changes it) says the answer may be incomplete, in `memory_find_symbol`, `memory_references`,
+  `find` and `refs`, instead of answering "not found" for code it never read. `rename` refuses to
+  start in such a project, since a rename that misses uses breaks the build.
 - Only the agent that holds a task can finish it (MCP `memory_task_finish`, `task done|fail --agent`), and a late result says it was not recorded; a heartbeat and a running `run` keep the claim alive, and `run` refuses `--timeout 0` or a timeout that reaches the lease.
 
 ## 1.5.0

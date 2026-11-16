@@ -7,7 +7,7 @@ import { formatPointer, parsePointer } from '../core/pointer.js';
 import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
 import { dependenciesOf } from '../core/tasks.js';
-import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../core/symbols.js';
+import { editSymbol, findReferences, findSymbol, outlineSymbols, partialSearch, renameSymbol, scanBudget } from '../core/symbols.js';
 import { readSource } from '../core/sourcefile.js';
 import { isRemote } from '../remote/client.js';
 import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
@@ -625,14 +625,16 @@ export async function callTool(
       return entries.map(e => `${e.declarationLine}-${e.endLine} ${e.kind} ${e.container ? `${e.container}.` : ''}${e.name}`).join('\n');
     }
     case 'memory_find_symbol': {
-      const matches = await findSymbol(service.root, requiredString(args, 'name'));
-      if (matches.length === 0) return 'Not found. Try memory_references, or a shorter name.';
-      return matches.map(m => `${m.pointer} (${m.kind}, lines ${m.declarationLine}-${m.endLine})`).join('\n');
+      const scan = scanBudget();
+      const matches = await findSymbol(service.root, requiredString(args, 'name'), 20, scan);
+      if (matches.length === 0) return `Not found. Try memory_references, or a shorter name.${partialSearch(scan)}`;
+      return matches.map(m => `${m.pointer} (${m.kind}, lines ${m.declarationLine}-${m.endLine})`).join('\n') + partialSearch(scan);
     }
     case 'memory_references': {
-      const refs = await findReferences(service.root, requiredString(args, 'name'));
-      if (refs.length === 0) return 'No uses found outside its declaration.';
-      return refs.map(r => `${r.file}:${r.line}  ${r.text}`).join('\n');
+      const scan = scanBudget();
+      const refs = await findReferences(service.root, requiredString(args, 'name'), 100, scan);
+      if (refs.length === 0) return `No uses found outside its declaration.${partialSearch(scan)}`;
+      return refs.map(r => `${r.file}:${r.line}  ${r.text}`).join('\n') + partialSearch(scan);
     }
     case 'memory_replace_symbol':
     case 'memory_insert_symbol': {

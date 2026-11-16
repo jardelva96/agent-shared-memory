@@ -26,6 +26,25 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-16: in a 52,000-file codebase, find answered "not found" for code it never read
+
+What happened: a legacy monorepo with about 52,000 code files. Walking it in name order, the search
+spent its 20,000-file limit on the first folders and never reached `Source/`, where most of the
+code is.
+
+Why the tool allowed it: the limit stopped the walk without a word. `memory_find_symbol` and
+`memory_references` answered as if they had read the whole project, so "not found" or "no uses"
+could be wrong, and `rename --apply` would have renamed the uses it saw and left the rest, breaking
+the build.
+
+Fix: the search notes whether a code file was left out. find and refs then say the answer may be
+incomplete and how to narrow it (`--root`, `AGENT_MEMORY_MAX_FILES`), and rename refuses to start.
+Unreleased.
+
+Test: `a search that stops at the file limit says so, and a rename then refuses to start`
+(symbols.test.ts), `a search that stops at the file limit says the answer may be incomplete`
+(mcp.test.ts).
+
 ## 2026-11-16: an edit by symbol would have destroyed every accent of a Windows-1252 file
 
 What happened: a legacy C# codebase keeps many files in Windows-1252. The project's own Claude Code

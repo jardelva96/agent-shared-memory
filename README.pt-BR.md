@@ -166,7 +166,9 @@ Todo número vem da pasta `bench/` e pode ser medido de novo:
 - **Ler por símbolo, sem servidor de linguagem.** `symbols <arquivo>`, `find <Nome|Tipo.membro>`,
   `refs <Nome>`, `rename <Nome> <NovoNome>` (mostra o plano antes; `--apply` grava) e
   `memory_read_pointer "arquivo::Tipo.membro"`. Funciona em TypeScript, JavaScript, Python, C#,
-  Java, Go e outras, sem instalar mais nada.
+  Java, Go e outras, sem instalar mais nada. Uma busca no projeto lê até 20.000 arquivos de código
+  (`AGENT_MEMORY_MAX_FILES` muda isso); passando disso, find e refs avisam que a resposta pode estar
+  incompleta, e o rename se recusa a começar.
 - **Vários computadores, ao vivo.** `agent-memory hub` compartilha uma memória pela rede, com
   senha; nos outros computadores, defina `AGENT_MEMORY_REMOTE` e `AGENT_MEMORY_TOKEN`. Um
   arquivo reservado num computador é barrado no outro na mesma hora. O código continua sendo

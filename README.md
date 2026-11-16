@@ -167,7 +167,9 @@ Every number comes from the `bench/` folder and can be run again:
 - **Read by symbol, without a language server.** `symbols <file>`, `find <Name|Type.member>`,
   `refs <Name>`, `rename <Name> <NewName>` (a plan first, `--apply` to write), and
   `memory_read_pointer "file::Type.member"`. Works in TypeScript, JavaScript, Python, C#, Java,
-  Go and more, with nothing else installed.
+  Go and more, with nothing else installed. A project-wide search reads up to 20,000 code files
+  (`AGENT_MEMORY_MAX_FILES` changes it); past that, find and refs say the answer may be
+  incomplete, and rename refuses to start.
 - **Several machines, live.** `agent-memory hub` shares one memory over the network with a
   token; on the other machines set `AGENT_MEMORY_REMOTE` and `AGENT_MEMORY_TOKEN`. A file
   reserved on one machine is refused on another the moment it is granted. Code is still read
