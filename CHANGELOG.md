@@ -14,6 +14,8 @@
   changes it) says the answer may be incomplete, in `memory_find_symbol`, `memory_references`,
   `find` and `refs`, instead of answering "not found" for code it never read. `rename` refuses to
   start in such a project, since a rename that misses uses breaks the build.
+- The MCP server reports version 1.5.0 in `initialize` (1.5.0 shipped saying 1.4.0), and a test now
+  keeps it equal to package.json.
 - Only the agent that holds a task can finish it (MCP `memory_task_finish`, `task done|fail --agent`), and a late result says it was not recorded; a heartbeat and a running `run` keep the claim alive, and `run` refuses `--timeout 0` or a timeout that reaches the lease.
 
 ## 1.5.0

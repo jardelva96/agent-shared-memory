@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { AgentMemoryService } from '../src/core/service.js';
-import { createMcpMethods, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/server.js';
+import { createMcpMethods, SERVER_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/server.js';
 import { MethodMap } from '../src/mcp/jsonrpc.js';
 import { TOOLS } from '../src/mcp/tools.js';
 
@@ -375,4 +375,14 @@ test('a search that stops at the file limit says the answer may be incomplete', 
     if (saved === undefined) delete process.env.AGENT_MEMORY_MAX_FILES;
     else process.env.AGENT_MEMORY_MAX_FILES = saved;
   }
+});
+
+test('the server reports the version of the package', async () => {
+  // dist/ cannot read package.json at startup, so the number is copied, and 1.5.0 shipped saying 1.4.0.
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  assert.equal(SERVER_VERSION, pkg.version);
+  await withServer(async (_call, methods) => {
+    const init = (await methods.get('initialize')!({})) as { serverInfo: { version: string } };
+    assert.equal(init.serverInfo.version, pkg.version);
+  });
 });
