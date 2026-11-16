@@ -26,6 +26,27 @@ Test: the test that fails without the fix.
 
 ---
 
+## 2026-11-16: an edit by symbol would have destroyed every accent of a Windows-1252 file
+
+What happened: a legacy C# codebase keeps many files in Windows-1252. The project's own Claude Code
+hook converts a file to UTF-8 before the Read tool opens it, but the MCP tools read the file
+themselves and never went through that hook.
+
+Why the tool allowed it: every source file was read as UTF-8, so each accented letter of a
+Windows-1252 file became U+FFFD. Reads showed `N�o` instead of `Não`, and `memory_replace_symbol`
+wrote the whole file back as UTF-8: the accents of every line, including the ones the edit never
+touched, were gone for good.
+
+Fix: a file that is not valid UTF-8 is read as Windows-1252 and written back in it. That mapping
+covers all 256 byte values one to one, so every byte the edit did not change comes back as it was,
+whatever the real code page; new text with a character Windows-1252 cannot hold is refused. A UTF-8
+BOM is kept. Unreleased.
+
+Test: `a Windows-1252 file is edited in Windows-1252, and every byte the edit did not change stays`,
+`new text that Windows-1252 cannot hold is refused, and the file is left as it was`, `a rename keeps
+a Windows-1252 file in Windows-1252`, `a UTF-8 file keeps its BOM through an edit`
+(symbols.test.ts), `a pointer into a Windows-1252 file reads its accents` (mcp.test.ts).
+
 ## 2026-11-16: a long class was listed, and edited, as if it ended at its 400th line
 
 What happened: reading a legacy C# service by symbol (one class, 1,863 lines), `symbols` listed the

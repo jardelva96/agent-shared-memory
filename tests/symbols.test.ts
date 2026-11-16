@@ -258,3 +258,62 @@ test('replacing a method longer than the read limit replaces all of it', async (
     assert.equal(after, ['public class Caixa', '{', '    public int Soma()', '    {', '        return 1;', '    }', '', '    public int Outro() { return 1; }', '}', ''].join('\n'));
   });
 });
+
+// Legacy C# saved as Windows-1252: "ç", "ã" and "é" are one byte each, and not valid UTF-8.
+const PEDIDO_1252 = [
+  'public class Pedido',
+  '{',
+  '    // Atenção: cálculo do preço',
+  '    public string Situacao() { return "Não pago"; }',
+  '',
+  '    public int Total()',
+  '    {',
+  '        return 0;',
+  '    }',
+  '}',
+  ''
+].join('\r\n');
+
+test('a Windows-1252 file is edited in Windows-1252, and every byte the edit did not change stays', async () => {
+  await withProject({}, async root => {
+    const file = path.join(root, 'Pedido.cs');
+    await writeFile(file, Buffer.from(PEDIDO_1252, 'latin1'));
+    const result = await editSymbol(root, 'Pedido.cs::Pedido.Total', 'public int Total()\n{\n    return 42; // preço em €\n}');
+    assert.equal(result.encoding, 'windows-1252');
+    // € is byte 0x80 in Windows-1252.
+    const expected = PEDIDO_1252.replace('        return 0;', '        return 42; // preço em \x80');
+    assert.deepEqual(await readFile(file), Buffer.from(expected, 'latin1'), 'read as UTF-8, the accents of line 3 came back as U+FFFD');
+  });
+});
+
+test('new text that Windows-1252 cannot hold is refused, and the file is left as it was', async () => {
+  await withProject({}, async root => {
+    const file = path.join(root, 'Pedido.cs');
+    await writeFile(file, Buffer.from(PEDIDO_1252, 'latin1'));
+    await assert.rejects(
+      editSymbol(root, 'Pedido.cs::Pedido.Total', 'public int Total()\n{\n    return 0; // a → b\n}'),
+      /"→" \(U\+2192\) on line 8 of the new text has no byte in Windows-1252/
+    );
+    assert.deepEqual(await readFile(file), Buffer.from(PEDIDO_1252, 'latin1'));
+  });
+});
+
+test('a rename keeps a Windows-1252 file in Windows-1252', async () => {
+  await withProject({}, async root => {
+    await writeFile(path.join(root, 'Pedido.cs'), Buffer.from(PEDIDO_1252, 'latin1'));
+    await writeFile(path.join(root, 'Uso.cs'), Buffer.from('// situação\r\nvar s = new Pedido().Situacao();\r\n', 'latin1'));
+    await renameSymbol(root, 'Situacao', 'Estado', { apply: true });
+    assert.deepEqual(await readFile(path.join(root, 'Pedido.cs')), Buffer.from(PEDIDO_1252.replace('Situacao', 'Estado'), 'latin1'));
+    assert.deepEqual(await readFile(path.join(root, 'Uso.cs')), Buffer.from('// situação\r\nvar s = new Pedido().Estado();\r\n', 'latin1'));
+  });
+});
+
+test('a UTF-8 file keeps its BOM through an edit', async () => {
+  await withProject({}, async root => {
+    const file = path.join(root, 'A.cs');
+    await writeFile(file, '﻿public class A\n{\n    public int B() { return 1; }\n}\n', 'utf8');
+    const result = await editSymbol(root, 'A.cs::A.B', 'public int B() { return 2; }');
+    assert.equal(result.encoding, 'utf8');
+    assert.equal(await readFile(file, 'utf8'), '﻿public class A\n{\n    public int B() { return 2; }\n}\n');
+  });
+});

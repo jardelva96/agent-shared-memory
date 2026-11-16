@@ -3,12 +3,13 @@
  * across the project, where it is used, and changing one symbol in place.
  */
 import type { Dirent } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { atomicWrite, withFileLock } from '../utils/fs.js';
 import { findDeclaration, maskLiterals, regexEnd, sliceAt } from './extract.js';
 import { resolvePaths } from './paths.js';
+import { encodeSource, readSource, SourceEncoding } from './sourcefile.js';
 import { syntaxProblem } from './syntax.js';
 import { parsePointer } from './pointer.js';
 
@@ -45,6 +46,8 @@ export interface EditResult {
   fromLine: number;
   toLine: number;
   removedLines: number;
+  /** The file was written back in the encoding it had. */
+  encoding: SourceEncoding;
 }
 
 const MODIFIERS =
@@ -295,7 +298,7 @@ export async function* codeFiles(root: string, dir = root, budget = { left: 20_0
 /** Each source file with its text, read in parallel batches, in the order codeFiles walks them. */
 async function* codeSources(root: string): AsyncGenerator<{ file: string; source: string }> {
   let batch: string[] = [];
-  const read = () => Promise.all(batch.map(async file => ({ file, source: await readFile(file, 'utf8').catch(() => '') })));
+  const read = () => Promise.all(batch.map(async file => ({ file, source: (await readSource(file).catch(() => undefined))?.text ?? '' })));
   for await (const file of codeFiles(root)) {
     batch.push(file);
     if (batch.length < READ_BATCH) continue;
@@ -376,7 +379,7 @@ export async function editSymbol(
 
   const lockName = createHash('sha1').update(rel.toLowerCase()).digest('hex').slice(0, 16);
   return withFileLock(path.join(resolvePaths(base).locksDir, `edit-${lockName}.lock`), async () => {
-    const source = await readFile(target, 'utf8');
+    const { text: source, encoding } = await readSource(target);
     const eol = source.includes('\r\n') ? '\r\n' : '\n';
     const lines = source.split(/\r?\n/);
     const declaration = findDeclaration(lines, parsed.symbol!);
@@ -416,6 +419,8 @@ export async function editSymbol(
 
     const next = lines.join(eol);
     const relPosix = rel.split(path.sep).join('/');
+    // Before any parser runs: new text the file's encoding cannot hold is refused.
+    const bytes = encodeSource(next, encoding);
     // Refuse a change that breaks a file that parsed before.
     if (options.checkSyntax !== false) {
       const after = await syntaxProblem(relPosix, next, base);
@@ -426,8 +431,8 @@ export async function editSymbol(
         );
       }
     }
-    await atomicWrite(target, next);
-    return { file: relPosix, symbol: parsed.symbol!, mode, fromLine, toLine: fromLine + written.length - 1, removedLines };
+    await atomicWrite(target, bytes);
+    return { file: relPosix, symbol: parsed.symbol!, mode, fromLine, toLine: fromLine + written.length - 1, removedLines, encoding };
   });
 }
 
@@ -484,7 +489,7 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
     const rel = path.relative(base, file);
     const lockName = createHash('sha1').update(rel.toLowerCase()).digest('hex').slice(0, 16);
     await withFileLock(path.join(resolvePaths(base).locksDir, `edit-${lockName}.lock`), async () => {
-      const source = await readFile(file, 'utf8');
+      const { text: source, encoding } = await readSource(file);
       const eol = source.includes('\r\n') ? '\r\n' : '\n';
       const lines = source.split(/\r?\n/);
       for (const i of lineNumbers) lines[i] = renameInLine(lines[i], maskLiterals(lines[i]), word, to);
@@ -494,7 +499,8 @@ export async function renameSymbol(root: string, symbol: string, to: string, opt
       if (broken && !(await syntaxProblem(relPosix, source, base))) {
         throw new Error(`Rename stopped at ${relPosix}: it would break the syntax at line ${broken.line ?? '?'} (${broken.message}). Files before it were renamed.`);
       }
-      await atomicWrite(file, next);
+      // The new name is ASCII, so any encoding holds it.
+      await atomicWrite(file, encodeSource(next, encoding));
     });
   }
   return { ...plan, applied: true };

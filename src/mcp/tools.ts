@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { configExists } from '../core/config.js';
 import { extractSymbol } from '../core/extract.js';
@@ -8,6 +8,7 @@ import { effectiveStatus } from '../core/render.js';
 import { AgentMemoryService } from '../core/service.js';
 import { dependenciesOf } from '../core/tasks.js';
 import { editSymbol, findReferences, findSymbol, outlineSymbols, renameSymbol } from '../core/symbols.js';
+import { readSource } from '../core/sourcefile.js';
 import { isRemote } from '../remote/client.js';
 import { ActivityType, AgentActivity, AgentState, Conflict, ProjectConfig, TaskStatus } from '../models/types.js';
 import { INVALID_PARAMS, RpcError } from './jsonrpc.js';
@@ -619,7 +620,7 @@ export async function callTool(
     case 'memory_symbols': {
       const file = requiredString(args, 'file');
       const target = insideRoot(service.root, file);
-      const entries = outlineSymbols(await readFile(target, 'utf8'), file);
+      const entries = outlineSymbols((await readSource(target)).text, file);
       if (entries.length === 0) return `No declarations recognised in ${file}. Read it with memory_read_pointer "${file}".`;
       return entries.map(e => `${e.declarationLine}-${e.endLine} ${e.kind} ${e.container ? `${e.container}.` : ''}${e.name}`).join('\n');
     }
@@ -653,7 +654,8 @@ export async function callTool(
           pointer: { file: result.file, symbol: result.symbol }
         });
       }
-      return `${mode === 'replace' ? 'Replaced' : 'Inserted'} at ${result.file} lines ${result.fromLine}-${result.toLine}${result.removedLines ? ` (was ${result.removedLines} lines)` : ''}.`;
+      const kept = result.encoding === 'utf8' ? '' : ' The file stays in Windows-1252.';
+      return `${mode === 'replace' ? 'Replaced' : 'Inserted'} at ${result.file} lines ${result.fromLine}-${result.toLine}${result.removedLines ? ` (was ${result.removedLines} lines)` : ''}.${kept}`;
     }
     case 'memory_remember': {
       const fact = await service.remember(requiredString(args, 'fact'), agentId());
@@ -840,7 +842,7 @@ async function readPointerText(service: AgentMemoryService, raw: string): Promis
         throw new Error(`${pointer.file} is ${Math.round(info.size / 1024)}kB. Point at a symbol to read part of it.`);
       }
     }
-    source = await readFile(target, 'utf8');
+    source = (await readSource(target)).text;
   } catch (error) {
     throw new Error(`Cannot read ${pointer.file}: ${error instanceof Error ? error.message : String(error)}`);
   }

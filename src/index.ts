@@ -24,6 +24,8 @@ export { codeFiles, editSymbol, findReferences, findSymbol, outlineSymbols, rena
 export type { EditMode, EditResult, OutlineEntry, ReferenceMatch, RenamePlan, SymbolMatch } from './core/symbols.js';
 export { syntaxProblem } from './core/syntax.js';
 export type { SyntaxProblem } from './core/syntax.js';
+export { decodeSource, encodeSource, readSource } from './core/sourcefile.js';
+export type { SourceEncoding, SourceText } from './core/sourcefile.js';
 export { ReservationStore, globToRegExp, normalizePattern, patternCovers, patternsOverlap } from './core/reservations.js';
 export type { ReservationConflict, ReserveOptions, ReserveResult } from './core/reservations.js';
 export { FactStore } from './core/facts.js';

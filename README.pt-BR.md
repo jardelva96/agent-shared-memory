@@ -159,7 +159,10 @@ Todo número vem da pasta `bench/` e pode ser medido de novo:
 - **Editar por símbolo, com segurança.** `memory_replace_symbol` troca uma função, método ou
   classe no lugar. O arquivo é relido sob trava na hora da edição, então dois agentes mudando
   duas funções do mesmo arquivo mantêm os dois trabalhos, e uma edição que quebraria a sintaxe
-  do arquivo é recusada com a linha do erro, antes de gravar qualquer coisa.
+  do arquivo é recusada com a linha do erro, antes de gravar qualquer coisa. Um arquivo que não é
+  UTF-8 (código legado em Windows-1252) é lido com os acentos e gravado de volta no próprio
+  encoding, com cada byte que a edição não mudou igual ao que era; texto novo que esse encoding não
+  comporta é recusado.
 - **Ler por símbolo, sem servidor de linguagem.** `symbols <arquivo>`, `find <Nome|Tipo.membro>`,
   `refs <Nome>`, `rename <Nome> <NovoNome>` (mostra o plano antes; `--apply` grava) e
   `memory_read_pointer "arquivo::Tipo.membro"`. Funciona em TypeScript, JavaScript, Python, C#,

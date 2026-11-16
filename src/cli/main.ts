@@ -631,7 +631,8 @@ async function main(): Promise<void> {
     case 'symbols': {
       const file = required(parsed.positionals[0], 'a file');
       const { outlineSymbols } = await import('../core/symbols.js');
-      const entries = outlineSymbols(await readFile(path.resolve(root, file), 'utf8'), file);
+      const { readSource } = await import('../core/sourcefile.js');
+      const entries = outlineSymbols((await readSource(path.resolve(root, file))).text, file);
       if (parsed.flags.json) console.log(JSON.stringify(entries, null, 2));
       else for (const e of entries) console.log(`${String(e.declarationLine).padStart(5)}-${String(e.endLine).padEnd(5)} ${e.kind.padEnd(10)} ${e.container ? `${e.container}.` : ''}${e.name}`);
       break;

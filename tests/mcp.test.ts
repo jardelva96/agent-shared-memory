@@ -345,3 +345,14 @@ test('a pointer to a symbol longer than the read limit says it was cut and where
     assert.doesNotMatch(text, /M449/);
   });
 });
+
+test('a pointer into a Windows-1252 file reads its accents', async () => {
+  await withServer(async (call, _methods, service) => {
+    await service.init('Pointer');
+    const source = 'public class Pedido\r\n{\r\n    public string Situacao() { return "Não pago"; }\r\n}\r\n';
+    await writeFile(path.join(service.root, 'Pedido.cs'), Buffer.from(source, 'latin1'));
+    const text = (await call('memory_read_pointer', { pointer: 'Pedido.cs::Pedido.Situacao' })).content[0].text;
+    assert.match(text, /"Não pago"/);
+    assert.doesNotMatch(text, /�/, 'not a replacement character where the accent was');
+  });
+});

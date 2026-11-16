@@ -161,7 +161,9 @@ Every number comes from the `bench/` folder and can be run again:
 - **Edit by symbol, safely.** `memory_replace_symbol` changes one function, method or class in
   place. The file is re-read under a lock when the edit applies, so two agents changing two
   functions of one file both keep their work, and an edit that would break the file's syntax is
-  refused with the line, before anything is written.
+  refused with the line, before anything is written. A file that is not UTF-8 (legacy
+  Windows-1252 code) is read with its accents and written back in its own encoding, every byte the
+  edit did not change as it was; new text that encoding cannot hold is refused.
 - **Read by symbol, without a language server.** `symbols <file>`, `find <Name|Type.member>`,
   `refs <Name>`, `rename <Name> <NewName>` (a plan first, `--apply` to write), and
   `memory_read_pointer "file::Type.member"`. Works in TypeScript, JavaScript, Python, C#, Java,

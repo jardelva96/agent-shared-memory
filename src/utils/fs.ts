@@ -62,7 +62,8 @@ export async function readWithRetry(file: string, timeoutMs = 5000, missingMs = 
   }
 }
 
-export async function atomicWrite(file: string, content: string): Promise<void> {
+/** A string is written as UTF-8; bytes are written as they are. */
+export async function atomicWrite(file: string, content: string | Uint8Array): Promise<void> {
   const dir = path.dirname(file);
   await ensureDir(dir);
   // Random suffix: two writes in the same millisecond must not share a temp path.
@@ -70,7 +71,7 @@ export async function atomicWrite(file: string, content: string): Promise<void> 
   try {
     const handle = await open(temp, 'w');
     try {
-      await handle.writeFile(content, 'utf8');
+      await (typeof content === 'string' ? handle.writeFile(content, 'utf8') : handle.writeFile(content));
       // Durability, not visibility.
       await handle.sync();
     } finally {
